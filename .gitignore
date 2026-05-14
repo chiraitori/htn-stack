@@ -1,0 +1,35 @@
+# Local environment
+.env
+.env.*
+!.env.example
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Build outputs and caches
+build/
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+*.exe
+*.dll
+*.so
+*.dylib
+*.log
+
+# Go caches/binaries
+.gocache/
+bin/
+dist/
+coverage.out
+
+# Flutter generated artifacts in nested app
+garden_lab/build/
+garden_lab/.dart_tool/
+garden_lab/.flutter-plugins
+garden_lab/.flutter-plugins-dependencies
+
