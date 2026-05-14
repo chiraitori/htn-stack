@@ -44,6 +44,7 @@ ESP32-C3 status -> ESP-NOW -> ESP32-S3 -> MQTT garden/pump/status
 
 - Soil capacitive sensor output -> GPIO16
 - DHT11 data/out -> GPIO18
+- Built-in WS2812 RGB LED -> GPIO48, nếu board S3 của bạn dùng chân khác thì đổi `RGB_LED_PIN`
 - GND chung cho tất cả module
 - VCC theo module thực tế
 
@@ -129,3 +130,23 @@ Khi bật auto pump, logic là:
 
 - Độ ẩm đất <= 35%: bật bơm.
 - Độ ẩm đất >= 45%: tắt bơm.
+
+## Pump failsafe
+
+- C3 tự tắt relay nếu không nhận heartbeat/command từ S3 trong 15 giây.
+- S3 tự gửi `OFF` qua ESP-NOW nếu mất MQTT quá 30 giây.
+- Khi MQTT kết nối lại sau failsafe, S3 publish `OFF` lên `garden/control/pump` và trạng thái `garden/pump/status` để app/server biết bơm đã tắt.
+
+## S3 WS2812 status LED
+
+S3 dùng LED WS2812 onboard để báo trạng thái:
+
+- Đỏ nhẹ: chưa kết nối MQTT server.
+- Vàng nhẹ: MQTT đã kết nối nhưng chưa thấy `pump-1`.
+- Rainbow 7 màu: MQTT đã kết nối và thấy `pump-1`.
+
+C3 đang dùng phải đặt đúng:
+
+```cpp
+const char *NODE_ID = "pump-1";
+```

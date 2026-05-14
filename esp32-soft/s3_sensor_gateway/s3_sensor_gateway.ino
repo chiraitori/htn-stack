@@ -1,3 +1,4 @@
+#include <Arduino.h>
 #include <PubSubClient.h>
 #include <WiFi.h>
 #include <WiFiManager.h>
@@ -27,6 +28,7 @@ const uint8_t ESPNOW_BROADCAST_MAC[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
 const uint8_t DHT_PIN = 18;
 const uint8_t SOIL_PIN = 16;
+const uint8_t RGB_LED_PIN = 48; // Built-in WS2812 on many ESP32-S3 DevKit boards.
 
 // Capacitive soil sensor: higher raw value means drier soil, lower means wetter soil.
 // Calibrated from current ESP32-S3 readings: dry air ~3400-3450, wet soil/water ~1430.
@@ -35,6 +37,11 @@ const int SOIL_DRY_RAW = 3450;
 const unsigned long SENSOR_PUBLISH_INTERVAL_MS = 8000;
 const unsigned long MQTT_RECONNECT_INTERVAL_MS = 3000;
 const unsigned long HEARTBEAT_INTERVAL_MS = 5000;
+const unsigned long MQTT_FAILSAFE_OFF_MS = 30000;
+const unsigned long DEVICE_ONLINE_TIMEOUT_MS = 15000;
+const unsigned long RGB_ANIMATION_INTERVAL_MS = 120;
+
+const char *EXPECTED_NODE = "pump-1";
 
 enum MessageType : uint8_t {
   MSG_PUMP_COMMAND = 1,
@@ -61,6 +68,12 @@ PubSubClient mqtt(wifiClient);
 unsigned long lastSensorPublishMs = 0;
 unsigned long lastMqttReconnectMs = 0;
 unsigned long lastHeartbeatMs = 0;
+unsigned long lastMqttConnectedMs = 0;
+bool mqttFailsafeOffSent = false;
+bool mqttFailsafeStatusPending = false;
+unsigned long lastPumpSeenMs = 0;
+unsigned long lastRgbAnimationMs = 0;
+uint8_t rainbowStep = 0;
 uint32_t commandSeq = 0;
 
 struct DhtReading {
@@ -72,6 +85,69 @@ struct DhtReading {
 int soilPercentFromRaw(int raw) {
   int percent = map(raw, SOIL_DRY_RAW, SOIL_WET_RAW, 0, 100);
   return constrain(percent, 0, 100);
+}
+
+void setStatusLed(uint8_t red, uint8_t green, uint8_t blue) {
+  neopixelWrite(RGB_LED_PIN, red, green, blue);
+}
+
+void wheelColor(uint8_t position, uint8_t &red, uint8_t &green, uint8_t &blue) {
+  position = 255 - position;
+  if (position < 85) {
+    red = 255 - position * 3;
+    green = 0;
+    blue = position * 3;
+    return;
+  }
+
+  if (position < 170) {
+    position -= 85;
+    red = 0;
+    green = position * 3;
+    blue = 255 - position * 3;
+    return;
+  }
+
+  position -= 170;
+  red = position * 3;
+  green = 255 - position * 3;
+  blue = 0;
+}
+
+bool isDeviceOnline(unsigned long lastSeenMs) {
+  return lastSeenMs > 0 && millis() - lastSeenMs <= DEVICE_ONLINE_TIMEOUT_MS;
+}
+
+bool pumpNodeOnline() {
+  return isDeviceOnline(lastPumpSeenMs);
+}
+
+void updateStatusLed() {
+  unsigned long now = millis();
+
+  if (!mqtt.connected()) {
+    setStatusLed(12, 0, 0);
+    return;
+  }
+
+  if (!pumpNodeOnline()) {
+    setStatusLed(12, 8, 0);
+    return;
+  }
+
+  if (now - lastRgbAnimationMs < RGB_ANIMATION_INTERVAL_MS) {
+    return;
+  }
+  lastRgbAnimationMs = now;
+
+  uint8_t red;
+  uint8_t green;
+  uint8_t blue;
+  wheelColor(rainbowStep, red, green, blue);
+  rainbowStep += 7;
+
+  // Keep the onboard LED readable without being painfully bright.
+  setStatusLed(red / 8, green / 8, blue / 8);
 }
 
 bool waitForDhtLevel(uint8_t level, uint32_t timeoutUs) {
@@ -208,7 +284,17 @@ bool parsePumpCommand(String payload, char *target, size_t targetLen, PumpState 
   return false;
 }
 
+void trackPumpNode(const char *nodeId) {
+  unsigned long now = millis();
+
+  if (strcmp(nodeId, EXPECTED_NODE) == 0) {
+    lastPumpSeenMs = now;
+  }
+}
+
 void publishPumpStatus(const uint8_t *mac, const PumpPacket &packet) {
+  trackPumpNode(packet.target);
+
   if (!mqtt.connected()) {
     return;
   }
@@ -377,11 +463,14 @@ void sendHeartbeatIfNeeded() {
 }
 
 void reconnectMqttIfNeeded() {
+  unsigned long now = millis();
+
   if (mqtt.connected()) {
+    lastMqttConnectedMs = now;
+    mqttFailsafeOffSent = false;
     return;
   }
 
-  unsigned long now = millis();
   if (now - lastMqttReconnectMs < MQTT_RECONNECT_INTERVAL_MS) {
     return;
   }
@@ -394,7 +483,32 @@ void reconnectMqttIfNeeded() {
   }
 
   Serial.println(" connected");
+  lastMqttConnectedMs = millis();
+  mqttFailsafeOffSent = false;
   mqtt.subscribe(TOPIC_PUMP_CONTROL, 1);
+
+  if (mqttFailsafeStatusPending) {
+    mqtt.publish(TOPIC_PUMP_CONTROL, "OFF");
+    mqtt.publish(TOPIC_PUMP_STATUS, "{\"node_id\":\"all\",\"state\":\"OFF\",\"reason\":\"mqtt_failsafe\"}");
+    mqttFailsafeStatusPending = false;
+    Serial.println("[Failsafe] MQTT reconnected -> reported pump OFF");
+  }
+}
+
+void checkMqttFailsafe() {
+  if (mqtt.connected()) {
+    return;
+  }
+
+  unsigned long now = millis();
+  if (now - lastMqttConnectedMs < MQTT_FAILSAFE_OFF_MS || mqttFailsafeOffSent) {
+    return;
+  }
+
+  Serial.println("[Failsafe] MQTT disconnected too long -> pump OFF");
+  sendPumpCommand("all", PUMP_OFF);
+  mqttFailsafeOffSent = true;
+  mqttFailsafeStatusPending = true;
 }
 
 void publishSensorDataIfNeeded() {
@@ -432,6 +546,8 @@ void setup() {
   Serial.begin(115200);
   delay(500);
 
+  pinMode(RGB_LED_PIN, OUTPUT);
+  setStatusLed(0, 0, 0);
   pinMode(RESET_BTN_PIN, INPUT_PULLUP);
 
   // WiFiManager: auto-connect or open captive portal.
@@ -447,6 +563,8 @@ void loop() {
   checkResetButton();
   reconnectMqttIfNeeded();
   mqtt.loop();
+  checkMqttFailsafe();
   publishSensorDataIfNeeded();
   sendHeartbeatIfNeeded();
+  updateStatusLed();
 }

@@ -48,6 +48,7 @@ struct __attribute__((packed)) PumpPacket {
 
 bool pumpOn = false;
 uint32_t lastCommandSeq = 0;
+bool pendingFailsafeStatus = false;
 
 // --- LED status tracking ---
 unsigned long lastGatewayContactMs = 0;
@@ -82,15 +83,26 @@ void ledWrite(bool on) {
   digitalWrite(LED_PIN, (LED_ACTIVE_LOW ? !on : on) ? HIGH : LOW);
 }
 
+void handleGatewayTimeout() {
+  gatewayConnected = false;
+  ledBlinkUntilMs = 0;
+  ledWrite(false);
+
+  if (pumpOn) {
+    setPump(false);
+    pendingFailsafeStatus = true;
+    Serial.println("[Failsafe] Gateway timeout -> pump OFF");
+  }
+
+  Serial.println("[LED] Gateway DISCONNECTED (timeout)");
+}
+
 void updateLed() {
   unsigned long now = millis();
 
   // Check gateway timeout.
   if (gatewayConnected && (now - lastGatewayContactMs > GATEWAY_TIMEOUT_MS)) {
-    gatewayConnected = false;
-    ledBlinkUntilMs = 0;
-    ledWrite(false);
-    Serial.println("[LED] Gateway DISCONNECTED (timeout)");
+    handleGatewayTimeout();
     return;
   }
 
@@ -187,6 +199,8 @@ void handleEspNowReceive(const uint8_t *srcMac, const uint8_t *data, int len) {
   if (packet.type == MSG_HEARTBEAT) {
     onGatewayContact();
     Serial.println("[ESP-NOW] heartbeat received");
+    sendStatus(srcMac, packet.seq);
+    pendingFailsafeStatus = false;
     return;
   }
 
@@ -210,6 +224,7 @@ void handleEspNowReceive(const uint8_t *srcMac, const uint8_t *data, int len) {
 
   lastCommandSeq = packet.seq;
   setPump(packet.state == PUMP_ON);
+  pendingFailsafeStatus = false;
   Serial.printf(
     "[ESP-NOW] command accepted target=%s state=%s seq=%lu\n",
     packet.target,
