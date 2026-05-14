@@ -52,7 +52,7 @@ Trong `s3_sensor_gateway.ino`, sửa các giá trị này trước khi nạp:
 ```cpp
 const char *WIFI_SSID = "YOUR_WIFI_SSID";
 const char *WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
-const char *MQTT_HOST = "192.168.1.10";
+const char *MQTT_HOST = "51.79.255.192";
 ```
 
 Hiệu chỉnh cảm biến đất:

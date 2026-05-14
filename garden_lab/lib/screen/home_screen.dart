@@ -6,7 +6,10 @@ import 'package:flutter/material.dart';
 import 'package:mqtt_client/mqtt_client.dart';
 import 'package:mqtt_client/mqtt_server_client.dart';
 
-const _configuredMqttHost = String.fromEnvironment('MQTT_HOST');
+const _configuredMqttHost = String.fromEnvironment(
+  'MQTT_HOST',
+  defaultValue: '51.79.255.192',
+);
 const _configuredMqttPort = int.fromEnvironment(
   'MQTT_PORT',
   defaultValue: 1883,

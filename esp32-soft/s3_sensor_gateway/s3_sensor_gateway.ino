@@ -12,7 +12,7 @@
 // - WiFiManager: auto-creates AP captive portal if WiFi is not configured.
 
 // Default MQTT settings.
-const char *MQTT_HOST = "192.168.1.10";
+const char *MQTT_HOST = "51.79.255.192";
 const uint16_t MQTT_PORT = 1883;
 const char *MQTT_CLIENT_ID = "esp32-s3-sensor-gateway";
 

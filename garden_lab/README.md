@@ -4,7 +4,13 @@ App tự retry kết nối MQTT mỗi 5 giây khi chưa kết nối được ser
 
 ## MQTT config
 
-Mặc định app dùng:
+Mặc định app dùng MQTT server:
+
+- `51.79.255.192:1883`
+
+Nếu build local/dev và không muốn dùng VPS, override bằng `--dart-define`.
+
+Fallback cũ khi bỏ trống `MQTT_HOST` trong code:
 
 - Android emulator: `10.0.2.2:1883`
 - Desktop/mobile thật: `127.0.0.1:1883`
@@ -13,13 +19,13 @@ Mặc định app dùng:
 Khi dùng MQTT broker trên VPS/OVH, build app với `--dart-define`:
 
 ```powershell
-flutter run --dart-define=MQTT_HOST=YOUR_OVH_IP --dart-define=MQTT_PORT=1883
+flutter run --dart-define=MQTT_HOST=51.79.255.192 --dart-define=MQTT_PORT=1883
 ```
 
 Build APK:
 
 ```powershell
-flutter build apk --release --dart-define=MQTT_HOST=YOUR_OVH_IP --dart-define=MQTT_PORT=1883
+flutter build apk --release --dart-define=MQTT_HOST=51.79.255.192 --dart-define=MQTT_PORT=1883
 ```
 
 Nếu dùng domain:
@@ -27,4 +33,3 @@ Nếu dùng domain:
 ```powershell
 flutter build apk --release --dart-define=MQTT_HOST=mqtt.example.com --dart-define=MQTT_PORT=1883
 ```
-
