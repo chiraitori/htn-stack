@@ -43,7 +43,7 @@ ESP32-C3 status -> ESP-NOW -> ESP32-S3 -> MQTT garden/pump/status
 ## ESP32-S3 wiring
 
 - Soil capacitive sensor output -> GPIO16
-- DHT11 data/out -> GPIO8
+- DHT11 data/out -> GPIO18
 - GND chung cho tất cả module
 - VCC theo module thực tế
 
@@ -58,8 +58,8 @@ const char *MQTT_HOST = "51.79.255.192";
 Hiệu chỉnh cảm biến đất:
 
 ```cpp
-const int SOIL_WET_RAW = 1200;
-const int SOIL_DRY_RAW = 3000;
+const int SOIL_WET_RAW = 1430;
+const int SOIL_DRY_RAW = 3450;
 ```
 
 Mở Serial Monitor của S3 để xem WiFi channel:
@@ -114,12 +114,12 @@ Cài các thư viện:
 
 ## Server auto pump
 
-Server chỉ tự publish lệnh `ON/OFF` lên `garden/control/pump` sau mỗi batch cảm biến khi bật `AUTO_PUMP_ENABLED=true`.
+Server tự publish lệnh `ON/OFF` lên `garden/control/pump` ngay khi nhận dữ liệu cảm biến nếu `AUTO_PUMP_ENABLED=true`.
 
 Các biến môi trường có thể chỉnh:
 
 ```env
-AUTO_PUMP_ENABLED=false
+AUTO_PUMP_ENABLED=true
 SOIL_PUMP_ON_BELOW=35
 SOIL_PUMP_OFF_ABOVE=45
 ```

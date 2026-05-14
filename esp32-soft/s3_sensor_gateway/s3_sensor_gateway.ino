@@ -1,4 +1,3 @@
-#include <DHT.h>
 #include <PubSubClient.h>
 #include <WiFi.h>
 #include <WiFiManager.h>
@@ -26,12 +25,13 @@ const char *TOPIC_PUMP_STATUS = "garden/pump/status";
 
 const uint8_t ESPNOW_BROADCAST_MAC[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
-const uint8_t DHT_PIN = 8;
-const uint8_t DHT_TYPE = DHT11;
+const uint8_t DHT_PIN = 18;
 const uint8_t SOIL_PIN = 16;
 
-const int SOIL_WET_RAW = 1200;
-const int SOIL_DRY_RAW = 3000;
+// Capacitive soil sensor: higher raw value means drier soil, lower means wetter soil.
+// Calibrated from current ESP32-S3 readings: dry air ~3400-3450, wet soil/water ~1430.
+const int SOIL_WET_RAW = 1430;
+const int SOIL_DRY_RAW = 3450;
 const unsigned long SENSOR_PUBLISH_INTERVAL_MS = 8000;
 const unsigned long MQTT_RECONNECT_INTERVAL_MS = 3000;
 const unsigned long HEARTBEAT_INTERVAL_MS = 5000;
@@ -55,7 +55,6 @@ struct __attribute__((packed)) PumpPacket {
   uint8_t state;
 };
 
-DHT dht(DHT_PIN, DHT_TYPE);
 WiFiClient wifiClient;
 PubSubClient mqtt(wifiClient);
 
@@ -64,9 +63,75 @@ unsigned long lastMqttReconnectMs = 0;
 unsigned long lastHeartbeatMs = 0;
 uint32_t commandSeq = 0;
 
+struct DhtReading {
+  bool ok;
+  float temperature;
+  float humidity;
+};
+
 int soilPercentFromRaw(int raw) {
   int percent = map(raw, SOIL_DRY_RAW, SOIL_WET_RAW, 0, 100);
   return constrain(percent, 0, 100);
+}
+
+bool waitForDhtLevel(uint8_t level, uint32_t timeoutUs) {
+  uint32_t start = micros();
+  while (digitalRead(DHT_PIN) == level) {
+    if (micros() - start > timeoutUs) {
+      return false;
+    }
+    yield();
+  }
+  return true;
+}
+
+DhtReading readDht11Safe() {
+  uint8_t data[5] = {0, 0, 0, 0, 0};
+
+  pinMode(DHT_PIN, OUTPUT_OPEN_DRAIN);
+  digitalWrite(DHT_PIN, LOW);
+  delay(20);
+  digitalWrite(DHT_PIN, HIGH);
+  delayMicroseconds(40);
+  pinMode(DHT_PIN, INPUT_PULLUP);
+
+  if (!waitForDhtLevel(HIGH, 100)) {
+    return {false, 0, 0};
+  }
+  if (!waitForDhtLevel(LOW, 100)) {
+    return {false, 0, 0};
+  }
+  if (!waitForDhtLevel(HIGH, 100)) {
+    return {false, 0, 0};
+  }
+
+  for (uint8_t bit = 0; bit < 40; bit++) {
+    if (!waitForDhtLevel(LOW, 70)) {
+      return {false, 0, 0};
+    }
+
+    uint32_t highStart = micros();
+    if (!waitForDhtLevel(HIGH, 100)) {
+      return {false, 0, 0};
+    }
+    uint32_t highTime = micros() - highStart;
+
+    data[bit / 8] <<= 1;
+    if (highTime > 40) {
+      data[bit / 8] |= 1;
+    }
+  }
+
+  uint8_t checksum = data[0] + data[1] + data[2] + data[3];
+  if (checksum != data[4]) {
+    return {false, 0, 0};
+  }
+
+  return {
+    true,
+    static_cast<float>(data[2]) + static_cast<float>(data[3]) / 10.0f,
+    static_cast<float>(data[0]) + static_cast<float>(data[1]) / 10.0f,
+  };
 }
 
 String extractJsonString(const String &json, const char *key) {
@@ -339,12 +404,11 @@ void publishSensorDataIfNeeded() {
   }
   lastSensorPublishMs = now;
 
-  float temperature = dht.readTemperature();
-  float humidity = dht.readHumidity();
+  DhtReading dhtReading = readDht11Safe();
   int soilRaw = analogRead(SOIL_PIN);
   int soilMoisture = soilPercentFromRaw(soilRaw);
 
-  if (isnan(temperature) || isnan(humidity)) {
+  if (!dhtReading.ok) {
     Serial.println("[Sensor] DHT read failed");
     return;
   }
@@ -354,8 +418,8 @@ void publishSensorDataIfNeeded() {
     payload,
     sizeof(payload),
     "{\"temperature\":%.1f,\"humidity\":%.1f,\"soil_moisture\":%d}",
-    temperature,
-    humidity,
+    dhtReading.temperature,
+    dhtReading.humidity,
     soilMoisture);
 
   if (mqtt.connected()) {
@@ -369,7 +433,6 @@ void setup() {
   delay(500);
 
   pinMode(RESET_BTN_PIN, INPUT_PULLUP);
-  dht.begin();
 
   // WiFiManager: auto-connect or open captive portal.
   connectWifiWithManager();

@@ -20,7 +20,7 @@ const bool LED_ACTIVE_LOW = true;
 
 // Must match the WiFi channel used by the router that ESP32-S3 connects to.
 // Check S3 Serial Monitor: "[WiFi] connected ... channel=N".
-const uint8_t ESPNOW_CHANNEL = 1;
+const uint8_t ESPNOW_CHANNEL = 6;
 
 // If no packet from S3 for this long, consider disconnected.
 const unsigned long GATEWAY_TIMEOUT_MS = 15000;

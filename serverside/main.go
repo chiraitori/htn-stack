@@ -136,6 +136,8 @@ func (h *BackendLogicHook) processSensorMessage(clientID string, payload []byte)
 
 	log.Printf("[Backend] Sensor payload from %s: %s", clientID, string(payload))
 
+	h.decidePumpCommand(sensor.SoilMoisture)
+
 	batch, ok := h.enqueueSensorSample(clientID, sensor)
 	if !ok {
 		return
@@ -249,15 +251,12 @@ func (h *BackendLogicHook) processSensorBatch(batch []sensorEnvelope) {
 		log.Printf("[MongoDB] history saved")
 	}
 
-	pumpCommand := h.decidePumpCommand(summary.Latest.SoilMoisture)
-
 	insightPayload, _ := json.Marshal(map[string]any{
 		"weather":       weather.Description,
 		"temperature":   weather.Temperature,
 		"humidity":      weather.Humidity,
 		"sample_count":  summary.Count,
 		"sensor_avg":    summary.Avg,
-		"pump_command":  pumpCommand,
 		"ai_suggestion": suggestion,
 	})
 
@@ -668,7 +667,7 @@ func loadConfig() AppConfig {
 		MongoCollection:   envOrDefault("MONGODB_COLLECTION", "sensor_history"),
 		MQTTPort:          envOrDefault("MQTT_BROKER_PORT", "1883"),
 		SensorBatchSize:   envIntOrDefault("SENSOR_BATCH_SIZE", 10),
-		AutoPumpEnabled:   envBoolOrDefault("AUTO_PUMP_ENABLED", false),
+		AutoPumpEnabled:   envBoolOrDefault("AUTO_PUMP_ENABLED", true),
 		SoilPumpOnBelow:   envFloatOrDefault("SOIL_PUMP_ON_BELOW", 35),
 		SoilPumpOffAbove:  envFloatOrDefault("SOIL_PUMP_OFF_ABOVE", 45),
 		WeatherLat:        envFloatOrDefault("WEATHER_LAT", 10.847519),
