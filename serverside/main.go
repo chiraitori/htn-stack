@@ -119,12 +119,28 @@ func (h *BackendLogicHook) Provides(b byte) bool {
 }
 
 func (h *BackendLogicHook) OnPublished(cl *mqtt.Client, pk packets.Packet) {
-	if pk.TopicName != topicSensorData {
+	switch pk.TopicName {
+	case topicSensorData:
+		payloadCopy := append([]byte(nil), pk.Payload...)
+		go h.processSensorMessage(cl.ID, payloadCopy)
+	case topicPumpControl:
+		h.processPumpControlMessage(cl.ID, pk.Payload)
+	default:
+		return
+	}
+}
+
+func (h *BackendLogicHook) processPumpControlMessage(clientID string, payload []byte) {
+	command := strings.ToUpper(strings.TrimSpace(string(payload)))
+	if command != "ON" && command != "OFF" {
 		return
 	}
 
-	payloadCopy := append([]byte(nil), pk.Payload...)
-	go h.processSensorMessage(cl.ID, payloadCopy)
+	h.mu.Lock()
+	h.pumpOn = command == "ON"
+	h.mu.Unlock()
+
+	log.Printf("[Backend] pump control from %s: %s", clientID, command)
 }
 
 func (h *BackendLogicHook) processSensorMessage(clientID string, payload []byte) {
@@ -267,21 +283,28 @@ func (h *BackendLogicHook) processSensorBatch(batch []sensorEnvelope) {
 
 func (h *BackendLogicHook) decidePumpCommand(soilMoisture float64) string {
 	if !h.cfg.AutoPumpEnabled {
+		log.Printf("[Backend] auto pump disabled (soil=%.1f%%)", soilMoisture)
 		return ""
 	}
 
 	command := ""
 	h.mu.Lock()
-	if soilMoisture <= h.cfg.SoilPumpOnBelow && !h.pumpOn {
+	if soilMoisture <= h.cfg.SoilPumpOnBelow {
 		command = "ON"
 		h.pumpOn = true
-	} else if soilMoisture >= h.cfg.SoilPumpOffAbove && h.pumpOn {
+	} else if soilMoisture >= h.cfg.SoilPumpOffAbove {
 		command = "OFF"
 		h.pumpOn = false
 	}
 	h.mu.Unlock()
 
 	if command == "" {
+		log.Printf(
+			"[Backend] pump hold (soil=%.1f%%, ON <= %.1f%%, OFF >= %.1f%%)",
+			soilMoisture,
+			h.cfg.SoilPumpOnBelow,
+			h.cfg.SoilPumpOffAbove,
+		)
 		return ""
 	}
 

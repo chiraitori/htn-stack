@@ -263,7 +263,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final builder = MqttClientPayloadBuilder()..addString(value ? 'ON' : 'OFF');
     client.publishMessage(
       _topicPumpControl,
-      MqttQos.exactlyOnce,
+      MqttQos.atLeastOnce,
       builder.payload!,
     );
     setState(() {

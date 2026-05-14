@@ -68,7 +68,7 @@ Mở Serial Monitor của S3 để xem WiFi channel:
 [WiFi] connected IP=... channel=6 mac=...
 ```
 
-Channel này phải được cấu hình trong code C3.
+Firmware C3 mới sẽ tự quét channel 1-13 để tìm heartbeat từ S3, nên dòng channel này chỉ dùng để debug Serial Monitor.
 
 ## ESP32-C3 wiring
 
@@ -89,10 +89,11 @@ Với board C3 thứ hai:
 const char *NODE_ID = "pump-2";
 ```
 
-Sửa channel cho đúng với S3/router:
+ESP-NOW cần cùng channel với WiFi của S3 gateway. Firmware C3 hiện tự quét channel 1-13, nên khi đổi hotspot/router thì không cần sửa code C3 nữa:
 
 ```cpp
-const uint8_t ESPNOW_CHANNEL = 6;
+const uint8_t ESPNOW_MIN_CHANNEL = 1;
+const uint8_t ESPNOW_MAX_CHANNEL = 13;
 ```
 
 Mặc định code đang để relay kích mức LOW, vì đa số module relay bật khi chân IN bị kéo xuống LOW:

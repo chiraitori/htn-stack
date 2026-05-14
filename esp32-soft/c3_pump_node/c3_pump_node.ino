@@ -18,9 +18,11 @@ const bool RELAY_ACTIVE_LOW = true;
 const uint8_t LED_PIN = 8;
 const bool LED_ACTIVE_LOW = true;
 
-// Must match the WiFi channel used by the router that ESP32-S3 connects to.
-// Check S3 Serial Monitor: "[WiFi] connected ... channel=N".
-const uint8_t ESPNOW_CHANNEL = 6;
+// ESP-NOW must use the same WiFi channel as the S3 gateway.
+// The C3 scans channels automatically until it receives a heartbeat/command.
+const uint8_t ESPNOW_MIN_CHANNEL = 1;
+const uint8_t ESPNOW_MAX_CHANNEL = 13;
+const unsigned long CHANNEL_SCAN_INTERVAL_MS = 300;
 
 // If no packet from S3 for this long, consider disconnected.
 const unsigned long GATEWAY_TIMEOUT_MS = 15000;
@@ -53,6 +55,8 @@ bool gatewayConnected = false;
 unsigned long ledBlinkUntilMs = 0;
 bool ledBlinkState = false;
 unsigned long lastBlinkToggleMs = 0;
+uint8_t currentEspNowChannel = ESPNOW_MIN_CHANNEL;
+unsigned long lastChannelScanMs = 0;
 const unsigned long BLINK_INTERVAL_MS = 100;
 const unsigned long BLINK_DURATION_MS = 600; // 3 blinks = 6 toggles @ 100ms
 
@@ -67,7 +71,7 @@ void onGatewayContact() {
   lastGatewayContactMs = millis();
   if (!gatewayConnected) {
     gatewayConnected = true;
-    Serial.println("[LED] Gateway CONNECTED");
+    Serial.printf("[LED] Gateway CONNECTED on channel %u\n", currentEspNowChannel);
   }
   // Trigger blink burst on every received packet.
   ledBlinkUntilMs = millis() + BLINK_DURATION_MS;
@@ -119,9 +123,38 @@ void ensurePeer(const uint8_t *mac) {
 
   esp_now_peer_info_t peer = {};
   memcpy(peer.peer_addr, mac, 6);
-  peer.channel = ESPNOW_CHANNEL;
+  peer.channel = 0;
   peer.encrypt = false;
   esp_now_add_peer(&peer);
+}
+
+void setEspNowChannel(uint8_t channel) {
+  if (channel < ESPNOW_MIN_CHANNEL || channel > ESPNOW_MAX_CHANNEL) {
+    channel = ESPNOW_MIN_CHANNEL;
+  }
+
+  currentEspNowChannel = channel;
+  esp_wifi_set_channel(currentEspNowChannel, WIFI_SECOND_CHAN_NONE);
+}
+
+void scanGatewayChannelIfNeeded() {
+  if (gatewayConnected) {
+    return;
+  }
+
+  unsigned long now = millis();
+  if (now - lastChannelScanMs < CHANNEL_SCAN_INTERVAL_MS) {
+    return;
+  }
+  lastChannelScanMs = now;
+
+  uint8_t nextChannel = currentEspNowChannel + 1;
+  if (nextChannel > ESPNOW_MAX_CHANNEL) {
+    nextChannel = ESPNOW_MIN_CHANNEL;
+  }
+
+  setEspNowChannel(nextChannel);
+  Serial.printf("[ESP-NOW] scanning channel %u\n", currentEspNowChannel);
 }
 
 void sendStatus(const uint8_t *gatewayMac, uint32_t seq) {
@@ -200,7 +233,7 @@ void setupEspNow() {
   WiFi.mode(WIFI_STA);
   WiFi.disconnect();
 
-  esp_wifi_set_channel(ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
+  setEspNowChannel(currentEspNowChannel);
 
   if (esp_now_init() != ESP_OK) {
     Serial.println("[ESP-NOW] init failed");
@@ -208,7 +241,7 @@ void setupEspNow() {
   }
 
   esp_now_register_recv_cb(onEspNowReceive);
-  Serial.printf("[ESP-NOW] ready node=%s channel=%u mac=%s\n", NODE_ID, ESPNOW_CHANNEL, WiFi.macAddress().c_str());
+  Serial.printf("[ESP-NOW] ready node=%s scanning channels %u-%u mac=%s\n", NODE_ID, ESPNOW_MIN_CHANNEL, ESPNOW_MAX_CHANNEL, WiFi.macAddress().c_str());
 }
 
 void setup() {
@@ -229,6 +262,7 @@ void setup() {
 }
 
 void loop() {
+  scanGatewayChannelIfNeeded();
   updateLed();
   delay(50); // Fast loop for smooth LED blinking.
 }
