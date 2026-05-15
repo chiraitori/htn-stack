@@ -23,6 +23,8 @@ const unsigned long RESET_HOLD_MS = 3000;
 const char *TOPIC_SENSOR_DATA = "garden/sensor/data";
 const char *TOPIC_PUMP_CONTROL = "garden/control/pump";
 const char *TOPIC_PUMP_STATUS = "garden/pump/status";
+const char *TOPIC_GARDEN_CONFIG = "garden/config/state";
+const char *TOPIC_GARDEN_CONFIG_GET = "garden/config/get";
 
 const uint8_t ESPNOW_BROADCAST_MAC[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
@@ -375,7 +377,13 @@ void onMqttMessage(char *topic, byte *payloadBytes, unsigned int length) {
 
   Serial.printf("[MQTT] topic=%s payload=%s\n", topic, payload.c_str());
 
-  if (String(topic) != TOPIC_PUMP_CONTROL) {
+  String topicName = String(topic);
+  if (topicName == TOPIC_GARDEN_CONFIG) {
+    Serial.printf("[MQTT] garden config synced: %s\n", payload.c_str());
+    return;
+  }
+
+  if (topicName != TOPIC_PUMP_CONTROL) {
     return;
   }
 
@@ -486,6 +494,8 @@ void reconnectMqttIfNeeded() {
   lastMqttConnectedMs = millis();
   mqttFailsafeOffSent = false;
   mqtt.subscribe(TOPIC_PUMP_CONTROL, 1);
+  mqtt.subscribe(TOPIC_GARDEN_CONFIG, 1);
+  mqtt.publish(TOPIC_GARDEN_CONFIG_GET, "{}");
 
   if (mqttFailsafeStatusPending) {
     mqtt.publish(TOPIC_PUMP_CONTROL, "OFF");

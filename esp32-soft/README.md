@@ -124,12 +124,23 @@ Các biến môi trường có thể chỉnh:
 AUTO_PUMP_ENABLED=true
 SOIL_PUMP_ON_BELOW=35
 SOIL_PUMP_OFF_ABOVE=45
+PLANT_TYPE=cây cảnh
+AI_RECOMMEND=true
 ```
+
+App Flutter cũng có thể đổi các giá trị này qua MQTT:
+
+- Gửi cấu hình: `garden/config/set`
+- Hỏi cấu hình hiện tại: `garden/config/get`
+- Server trả cấu hình retained: `garden/config/state`
+- Xin gợi ý nhanh theo loại cây: `garden/config/recommend`
 
 Khi bật auto pump, logic là:
 
 - Độ ẩm đất <= 35%: bật bơm.
 - Độ ẩm đất >= 45%: tắt bơm.
+
+Nếu app đổi ngưỡng, server dùng ngưỡng mới ngay cho các mẫu cảm biến kế tiếp. S3 subscribe `garden/config/state` để log cấu hình sau mỗi lần reconnect MQTT; C3 vẫn chỉ làm node chấp hành và nhận `ON/OFF` từ S3 qua ESP-NOW.
 
 ## Pump failsafe
 

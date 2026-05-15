@@ -29,9 +29,13 @@ import (
 )
 
 const (
-	topicSensorData  = "garden/sensor/data"
-	topicAIInsight   = "garden/ai/insight"
-	topicPumpControl = "garden/control/pump"
+	topicSensorData      = "garden/sensor/data"
+	topicAIInsight       = "garden/ai/insight"
+	topicPumpControl     = "garden/control/pump"
+	topicGardenConfigSet = "garden/config/set"
+	topicGardenConfigGet = "garden/config/get"
+	topicGardenConfig    = "garden/config/state"
+	topicGardenRecommend = "garden/config/recommend"
 )
 
 type AppConfig struct {
@@ -49,8 +53,42 @@ type AppConfig struct {
 	AutoPumpEnabled   bool
 	SoilPumpOnBelow   float64
 	SoilPumpOffAbove  float64
+	PlantType         string
+	AIRecommend       bool
 	WeatherLat        float64
 	WeatherLon        float64
+}
+
+type GardenConfigState struct {
+	AutoPumpEnabled  bool    `json:"auto_pump_enabled"`
+	SoilPumpOnBelow  float64 `json:"soil_pump_on_below"`
+	SoilPumpOffAbove float64 `json:"soil_pump_off_above"`
+	PlantType        string  `json:"plant_type"`
+	AIRecommend      bool    `json:"ai_recommend"`
+	Source           string  `json:"source"`
+}
+
+type GardenConfigUpdate struct {
+	AutoPumpEnabled  *bool    `json:"auto_pump_enabled"`
+	SoilPumpOnBelow  *float64 `json:"soil_pump_on_below"`
+	SoilPumpOffAbove *float64 `json:"soil_pump_off_above"`
+	PlantType        *string  `json:"plant_type"`
+	AIRecommend      *bool    `json:"ai_recommend"`
+}
+
+type PlantProfile struct {
+	PlantType        string
+	SoilPumpOnBelow  float64
+	SoilPumpOffAbove float64
+}
+
+var plantProfiles = map[string]PlantProfile{
+	"rau ăn lá":  {PlantType: "rau ăn lá", SoilPumpOnBelow: 45, SoilPumpOffAbove: 60},
+	"cà chua":    {PlantType: "cà chua", SoilPumpOnBelow: 40, SoilPumpOffAbove: 55},
+	"ớt":         {PlantType: "ớt", SoilPumpOnBelow: 35, SoilPumpOffAbove: 50},
+	"hoa cảnh":   {PlantType: "hoa cảnh", SoilPumpOnBelow: 35, SoilPumpOffAbove: 50},
+	"cây cảnh":   {PlantType: "cây cảnh", SoilPumpOnBelow: 30, SoilPumpOffAbove: 45},
+	"xương rồng": {PlantType: "xương rồng", SoilPumpOnBelow: 15, SoilPumpOffAbove: 25},
 }
 
 type SensorData struct {
@@ -125,9 +163,141 @@ func (h *BackendLogicHook) OnPublished(cl *mqtt.Client, pk packets.Packet) {
 		go h.processSensorMessage(cl.ID, payloadCopy)
 	case topicPumpControl:
 		h.processPumpControlMessage(cl.ID, pk.Payload)
+	case topicGardenConfigSet:
+		h.processGardenConfigSetMessage(cl.ID, pk.Payload)
+	case topicGardenConfigGet:
+		h.publishGardenConfigState("request")
+	case topicGardenConfig:
+		return
+	case topicGardenRecommend:
+		h.processGardenConfigRecommendMessage(cl.ID, pk.Payload)
 	default:
 		return
 	}
+}
+
+func normalizePlantType(value string) string {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	if normalized == "" {
+		return "cây cảnh"
+	}
+	return normalized
+}
+
+func plantProfileFor(plantType string, fallbackOnBelow float64, fallbackOffAbove float64) PlantProfile {
+	normalized := normalizePlantType(plantType)
+	if profile, ok := plantProfiles[normalized]; ok {
+		return profile
+	}
+	return PlantProfile{
+		PlantType:        normalized,
+		SoilPumpOnBelow:  fallbackOnBelow,
+		SoilPumpOffAbove: fallbackOffAbove,
+	}
+}
+
+func clampMoisture(value float64) float64 {
+	if value < 0 {
+		return 0
+	}
+	if value > 100 {
+		return 100
+	}
+	return value
+}
+
+func normalizeThresholds(onBelow float64, offAbove float64) (float64, float64) {
+	onBelow = clampMoisture(onBelow)
+	offAbove = clampMoisture(offAbove)
+	if offAbove <= onBelow {
+		offAbove = onBelow + 5
+	}
+	if offAbove > 100 {
+		offAbove = 100
+		onBelow = offAbove - 5
+	}
+	return onBelow, offAbove
+}
+
+func (h *BackendLogicHook) gardenConfigState(source string) GardenConfigState {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	return GardenConfigState{
+		AutoPumpEnabled:  h.cfg.AutoPumpEnabled,
+		SoilPumpOnBelow:  h.cfg.SoilPumpOnBelow,
+		SoilPumpOffAbove: h.cfg.SoilPumpOffAbove,
+		PlantType:        h.cfg.PlantType,
+		AIRecommend:      h.cfg.AIRecommend,
+		Source:           source,
+	}
+}
+
+func (h *BackendLogicHook) publishGardenConfigState(source string) {
+	state := h.gardenConfigState(source)
+	payload, err := json.Marshal(state)
+	if err != nil {
+		log.Printf("[Backend] marshal garden config failed: %v", err)
+		return
+	}
+
+	if err := h.broker.Publish(topicGardenConfig, payload, true, 1); err != nil {
+		log.Printf("[Backend] publish garden config error: %v", err)
+		return
+	}
+
+	log.Printf("[Backend] garden config state: %s", string(payload))
+}
+
+func (h *BackendLogicHook) processGardenConfigSetMessage(clientID string, payload []byte) {
+	var update GardenConfigUpdate
+	if err := json.Unmarshal(payload, &update); err != nil {
+		log.Printf("[Backend] invalid garden config from %s: %v", clientID, err)
+		return
+	}
+
+	h.mu.Lock()
+	if update.AutoPumpEnabled != nil {
+		h.cfg.AutoPumpEnabled = *update.AutoPumpEnabled
+	}
+	if update.AIRecommend != nil {
+		h.cfg.AIRecommend = *update.AIRecommend
+	}
+	if update.PlantType != nil {
+		h.cfg.PlantType = normalizePlantType(*update.PlantType)
+	}
+	if update.SoilPumpOnBelow != nil {
+		h.cfg.SoilPumpOnBelow = *update.SoilPumpOnBelow
+	}
+	if update.SoilPumpOffAbove != nil {
+		h.cfg.SoilPumpOffAbove = *update.SoilPumpOffAbove
+	}
+	h.cfg.SoilPumpOnBelow, h.cfg.SoilPumpOffAbove = normalizeThresholds(h.cfg.SoilPumpOnBelow, h.cfg.SoilPumpOffAbove)
+	h.mu.Unlock()
+
+	log.Printf("[Backend] garden config update from %s: %s", clientID, string(payload))
+	h.publishGardenConfigState("app")
+}
+
+func (h *BackendLogicHook) processGardenConfigRecommendMessage(clientID string, payload []byte) {
+	var req struct {
+		PlantType string `json:"plant_type"`
+	}
+	if err := json.Unmarshal(payload, &req); err != nil {
+		log.Printf("[Backend] invalid garden recommend request from %s: %v", clientID, err)
+		return
+	}
+
+	h.mu.Lock()
+	profile := plantProfileFor(req.PlantType, h.cfg.SoilPumpOnBelow, h.cfg.SoilPumpOffAbove)
+	h.cfg.PlantType = profile.PlantType
+	h.cfg.SoilPumpOnBelow = profile.SoilPumpOnBelow
+	h.cfg.SoilPumpOffAbove = profile.SoilPumpOffAbove
+	h.cfg.AIRecommend = true
+	h.mu.Unlock()
+
+	log.Printf("[Backend] garden config recommendation for %s requested by %s", profile.PlantType, clientID)
+	h.publishGardenConfigState("ai_recommend")
 }
 
 func (h *BackendLogicHook) processPumpControlMessage(clientID string, payload []byte) {
@@ -254,14 +424,19 @@ func (h *BackendLogicHook) processSensorBatch(batch []sensorEnvelope) {
 		log.Printf("[Weather API] current: %s, %.1fC", weather.Description, weather.Temperature)
 	}
 
-	suggestion, err := h.requestGeminiSuggestion(summary, weather)
-	if err != nil {
-		log.Printf("[AI Agent] fallback due to error: %v", err)
-		suggestion = fallbackSuggestion(summary, weather)
+	gardenCfg := h.gardenConfigState("batch")
+	suggestion := fallbackSuggestion(summary, weather, gardenCfg)
+	if gardenCfg.AIRecommend {
+		geminiSuggestion, err := h.requestGeminiSuggestion(summary, weather, gardenCfg)
+		if err != nil {
+			log.Printf("[AI Agent] fallback due to error: %v", err)
+		} else {
+			suggestion = geminiSuggestion
+		}
 	}
 	log.Printf("[AI Agent] suggestion: %s", suggestion)
 
-	if err := h.saveHistory(clientID, summary, weather, suggestion); err != nil {
+	if err := h.saveHistory(clientID, summary, weather, gardenCfg, suggestion); err != nil {
 		log.Printf("[MongoDB] save history failed: %v", err)
 	} else if h.history != nil {
 		log.Printf("[MongoDB] history saved")
@@ -274,6 +449,7 @@ func (h *BackendLogicHook) processSensorBatch(batch []sensorEnvelope) {
 		"sample_count":  summary.Count,
 		"sensor_avg":    summary.Avg,
 		"ai_suggestion": suggestion,
+		"garden_config": gardenCfg,
 	})
 
 	if err := h.broker.Publish(topicAIInsight, insightPayload, false, 1); err != nil {
@@ -282,17 +458,23 @@ func (h *BackendLogicHook) processSensorBatch(batch []sensorEnvelope) {
 }
 
 func (h *BackendLogicHook) decidePumpCommand(soilMoisture float64) string {
-	if !h.cfg.AutoPumpEnabled {
+	h.mu.Lock()
+	autoPumpEnabled := h.cfg.AutoPumpEnabled
+	onBelow := h.cfg.SoilPumpOnBelow
+	offAbove := h.cfg.SoilPumpOffAbove
+	h.mu.Unlock()
+
+	if !autoPumpEnabled {
 		log.Printf("[Backend] auto pump disabled (soil=%.1f%%)", soilMoisture)
 		return ""
 	}
 
 	command := ""
 	h.mu.Lock()
-	if soilMoisture <= h.cfg.SoilPumpOnBelow {
+	if soilMoisture <= onBelow {
 		command = "ON"
 		h.pumpOn = true
-	} else if soilMoisture >= h.cfg.SoilPumpOffAbove {
+	} else if soilMoisture >= offAbove {
 		command = "OFF"
 		h.pumpOn = false
 	}
@@ -302,8 +484,8 @@ func (h *BackendLogicHook) decidePumpCommand(soilMoisture float64) string {
 		log.Printf(
 			"[Backend] pump hold (soil=%.1f%%, ON <= %.1f%%, OFF >= %.1f%%)",
 			soilMoisture,
-			h.cfg.SoilPumpOnBelow,
-			h.cfg.SoilPumpOffAbove,
+			onBelow,
+			offAbove,
 		)
 		return ""
 	}
@@ -444,7 +626,7 @@ func (h *BackendLogicHook) fetchCurrentWeatherWeatherAPI() (WeatherSummary, erro
 	}, nil
 }
 
-func (h *BackendLogicHook) requestGeminiSuggestion(summary SensorBatchSummary, weather WeatherSummary) (string, error) {
+func (h *BackendLogicHook) requestGeminiSuggestion(summary SensorBatchSummary, weather WeatherSummary, gardenCfg GardenConfigState) (string, error) {
 	if h.cfg.GeminiAPIKey == "" || strings.HasPrefix(h.cfg.GeminiAPIKey, "your_") {
 		return "", fmt.Errorf("GEMINI_API_KEY is missing")
 	}
@@ -460,7 +642,10 @@ func (h *BackendLogicHook) requestGeminiSuggestion(summary SensorBatchSummary, w
 	}
 
 	prompt := fmt.Sprintf(
-		"Ban la tro ly nong nghiep thong minh. Day la %d mau cam bien gan nhat: nhiet do TB=%.1fC (min %.1f, max %.1f), do am khong khi TB=%.1f%% (min %.1f, max %.1f), do am dat TB=%.1f%% (min %.1f, max %.1f), mau moi nhat do am dat=%.1f%%. Thoi tiet hien tai: %s, nhiet do %.1fC, do am %d%%. Hay dua ra 1-2 cau bang tieng Viet tu nhien: co nen tuoi khong, neu co thi goi y thoi diem va thoi luong tuoi.",
+		"Ban la tro ly nong nghiep thong minh cho cay %s. Nguong hien tai: bat bom khi do am dat <= %.1f%%, tat bom khi >= %.1f%%. Day la %d mau cam bien gan nhat: nhiet do TB=%.1fC (min %.1f, max %.1f), do am khong khi TB=%.1f%% (min %.1f, max %.1f), do am dat TB=%.1f%% (min %.1f, max %.1f), mau moi nhat do am dat=%.1f%%. Thoi tiet hien tai: %s, nhiet do %.1fC, do am %d%%. Hay dua ra 1-2 cau bang tieng Viet tu nhien: co nen tuoi khong, neu can thi noi ro co nen tang/giam nguong do am cho loai cay nay khong.",
+		gardenCfg.PlantType,
+		gardenCfg.SoilPumpOnBelow,
+		gardenCfg.SoilPumpOffAbove,
 		summary.Count,
 		summary.Avg.Temperature,
 		summary.Min.Temperature,
@@ -619,7 +804,7 @@ func uniqueNonEmpty(values []string) []string {
 	return out
 }
 
-func (h *BackendLogicHook) saveHistory(clientID string, summary SensorBatchSummary, weather WeatherSummary, suggestion string) error {
+func (h *BackendLogicHook) saveHistory(clientID string, summary SensorBatchSummary, weather WeatherSummary, gardenCfg GardenConfigState, suggestion string) error {
 	if h.history == nil {
 		return nil
 	}
@@ -655,6 +840,13 @@ func (h *BackendLogicHook) saveHistory(clientID string, summary SensorBatchSumma
 			"temperature": weather.Temperature,
 			"humidity":    weather.Humidity,
 		},
+		"garden_config": bson.M{
+			"auto_pump_enabled":   gardenCfg.AutoPumpEnabled,
+			"soil_pump_on_below":  gardenCfg.SoilPumpOnBelow,
+			"soil_pump_off_above": gardenCfg.SoilPumpOffAbove,
+			"plant_type":          gardenCfg.PlantType,
+			"ai_recommend":        gardenCfg.AIRecommend,
+		},
 		"ai_suggestion": suggestion,
 	}
 
@@ -665,14 +857,17 @@ func (h *BackendLogicHook) saveHistory(clientID string, summary SensorBatchSumma
 	return err
 }
 
-func fallbackSuggestion(summary SensorBatchSummary, weather WeatherSummary) string {
-	if summary.Avg.SoilMoisture < 35 {
+func fallbackSuggestion(summary SensorBatchSummary, weather WeatherSummary, gardenCfg GardenConfigState) string {
+	if summary.Avg.SoilMoisture <= gardenCfg.SoilPumpOnBelow {
 		if strings.Contains(strings.ToLower(weather.Description), "mua") {
-			return "Dat dang kho nhung troi co mua, tam hoan tuoi 15-30 phut de tiet kiem nuoc."
+			return fmt.Sprintf("Dat cua %s dang kho nhung troi co mua, tam hoan tuoi 15-30 phut de tiet kiem nuoc.", gardenCfg.PlantType)
 		}
-		return "Do am dat thap, nen bat bom tuoi 3-5 phut."
+		return fmt.Sprintf("Do am dat cua %s thap, nen bat bom tuoi 3-5 phut.", gardenCfg.PlantType)
 	}
-	return "Do am dat dang on dinh, chua can tuoi them luc nay."
+	if summary.Avg.SoilMoisture >= gardenCfg.SoilPumpOffAbove {
+		return fmt.Sprintf("Do am dat cua %s da du, nen tat bom va theo doi them.", gardenCfg.PlantType)
+	}
+	return fmt.Sprintf("Do am dat cua %s dang nam giua nguong tuoi, chua can doi trang thai bom.", gardenCfg.PlantType)
 }
 
 func loadConfig() AppConfig {
@@ -693,6 +888,8 @@ func loadConfig() AppConfig {
 		AutoPumpEnabled:   envBoolOrDefault("AUTO_PUMP_ENABLED", true),
 		SoilPumpOnBelow:   envFloatOrDefault("SOIL_PUMP_ON_BELOW", 35),
 		SoilPumpOffAbove:  envFloatOrDefault("SOIL_PUMP_OFF_ABOVE", 45),
+		PlantType:         normalizePlantType(envOrDefault("PLANT_TYPE", "cây cảnh")),
+		AIRecommend:       envBoolOrDefault("AI_RECOMMEND", true),
 		WeatherLat:        envFloatOrDefault("WEATHER_LAT", 10.847519),
 		WeatherLon:        envFloatOrDefault("WEATHER_LON", 106.673947),
 	}
@@ -700,6 +897,7 @@ func loadConfig() AppConfig {
 	if cfg.GeminiModel == "" || strings.HasPrefix(cfg.GeminiModel, "your_") {
 		cfg.GeminiModel = "gemini-2.5-flash"
 	}
+	cfg.SoilPumpOnBelow, cfg.SoilPumpOffAbove = normalizeThresholds(cfg.SoilPumpOnBelow, cfg.SoilPumpOffAbove)
 
 	return cfg
 }
@@ -822,7 +1020,7 @@ func main() {
 	}()
 	fmt.Printf("GARDEN SERVER: MQTT broker started on %s\n", listenAddress)
 	fmt.Printf("Sensor batching: %d samples/request\n", cfg.SensorBatchSize)
-	fmt.Printf("Auto pump: %t (ON <= %.1f%%, OFF >= %.1f%%)\n", cfg.AutoPumpEnabled, cfg.SoilPumpOnBelow, cfg.SoilPumpOffAbove)
+	fmt.Printf("Auto pump: %t (plant=%s, AI=%t, ON <= %.1f%%, OFF >= %.1f%%)\n", cfg.AutoPumpEnabled, cfg.PlantType, cfg.AIRecommend, cfg.SoilPumpOnBelow, cfg.SoilPumpOffAbove)
 	fmt.Printf("Weather location: lat=%.6f lon=%.6f\n", cfg.WeatherLat, cfg.WeatherLon)
 
 	sigs := make(chan os.Signal, 1)

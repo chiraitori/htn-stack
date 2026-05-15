@@ -18,6 +18,18 @@ const _mqttRetryInterval = Duration(seconds: 5);
 const _topicSensorData = 'garden/sensor/data';
 const _topicPumpControl = 'garden/control/pump';
 const _topicAIInsight = 'garden/ai/insight';
+const _topicGardenConfigSet = 'garden/config/set';
+const _topicGardenConfigGet = 'garden/config/get';
+const _topicGardenConfigState = 'garden/config/state';
+const _topicGardenConfigRecommend = 'garden/config/recommend';
+const _plantTypes = [
+  'rau ăn lá',
+  'cà chua',
+  'ớt',
+  'hoa cảnh',
+  'cây cảnh',
+  'xương rồng',
+];
 
 enum MqttConnectionPhase { disconnected, connecting, connected }
 
@@ -44,6 +56,11 @@ class _HomeScreenState extends State<HomeScreen> {
   double humidity = 0.0;
   int soilMoisture = 0;
   bool isPumpOn = false;
+  bool autoPumpEnabled = true;
+  bool aiRecommend = true;
+  double soilPumpOnBelow = 35;
+  double soilPumpOffAbove = 45;
+  String plantType = 'cây cảnh';
   String weatherSummary = 'Chưa có dữ liệu';
   String aiSuggestion = 'Chưa có gợi ý';
 
@@ -133,6 +150,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _client = nextClient;
       _subscribeToTopics(nextClient);
       _listenForMqttUpdates(nextClient);
+      _requestGardenConfig(nextClient);
 
       setState(() {
         _connectionPhase = MqttConnectionPhase.connected;
@@ -151,6 +169,7 @@ class _HomeScreenState extends State<HomeScreen> {
     client.subscribe(_topicSensorData, MqttQos.atMostOnce);
     client.subscribe(_topicPumpControl, MqttQos.atMostOnce);
     client.subscribe(_topicAIInsight, MqttQos.atMostOnce);
+    client.subscribe(_topicGardenConfigState, MqttQos.atLeastOnce);
   }
 
   void _listenForMqttUpdates(MqttServerClient client) {
@@ -184,6 +203,9 @@ class _HomeScreenState extends State<HomeScreen> {
             break;
           case _topicAIInsight:
             _handleInsightPayload(payload);
+            break;
+          case _topicGardenConfigState:
+            _handleGardenConfigPayload(payload);
             break;
         }
       },
@@ -232,6 +254,31 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  void _handleGardenConfigPayload(String payload) {
+    try {
+      final config = jsonDecode(payload) as Map<String, dynamic>;
+      final nextPlantType = (config['plant_type'] ?? plantType).toString();
+      final normalizedPlantType = _plantTypes.contains(nextPlantType)
+          ? nextPlantType
+          : plantType;
+
+      setState(() {
+        autoPumpEnabled =
+            config['auto_pump_enabled'] as bool? ?? autoPumpEnabled;
+        aiRecommend = config['ai_recommend'] as bool? ?? aiRecommend;
+        plantType = normalizedPlantType;
+        soilPumpOnBelow =
+            (config['soil_pump_on_below'] as num? ?? soilPumpOnBelow)
+                .toDouble();
+        soilPumpOffAbove =
+            (config['soil_pump_off_above'] as num? ?? soilPumpOffAbove)
+                .toDouble();
+      });
+    } catch (e) {
+      debugPrint('Garden config JSON parse error: $e');
+    }
+  }
+
   void _onConnected() => debugPrint('MQTT connected');
 
   void _onDisconnected() {
@@ -268,6 +315,62 @@ class _HomeScreenState extends State<HomeScreen> {
     );
     setState(() {
       isPumpOn = value;
+    });
+  }
+
+  void _publishJsonTopic(String topic, Map<String, dynamic> payload) {
+    final client = _client;
+    if (!isConnected || client == null) {
+      return;
+    }
+
+    final builder = MqttClientPayloadBuilder()..addString(jsonEncode(payload));
+    client.publishMessage(topic, MqttQos.atLeastOnce, builder.payload!);
+  }
+
+  void _requestGardenConfig([MqttServerClient? mqttClient]) {
+    final client = mqttClient ?? _client;
+    if (client == null) {
+      return;
+    }
+
+    final builder = MqttClientPayloadBuilder()..addString('{}');
+    client.publishMessage(
+      _topicGardenConfigGet,
+      MqttQos.atLeastOnce,
+      builder.payload!,
+    );
+  }
+
+  void _publishGardenConfig() {
+    _publishJsonTopic(_topicGardenConfigSet, {
+      'auto_pump_enabled': autoPumpEnabled,
+      'ai_recommend': aiRecommend,
+      'plant_type': plantType,
+      'soil_pump_on_below': soilPumpOnBelow.round(),
+      'soil_pump_off_above': soilPumpOffAbove.round(),
+    });
+  }
+
+  void _requestAIRecommendation() {
+    _publishJsonTopic(_topicGardenConfigRecommend, {'plant_type': plantType});
+  }
+
+  void _setPumpOnThreshold(double value) {
+    setState(() {
+      soilPumpOnBelow = value.roundToDouble();
+      if (soilPumpOffAbove <= soilPumpOnBelow) {
+        soilPumpOffAbove = (soilPumpOnBelow + 5).clamp(0, 100).toDouble();
+      }
+    });
+  }
+
+  void _setPumpOffThreshold(double value) {
+    setState(() {
+      soilPumpOffAbove = value.roundToDouble();
+      if (soilPumpOnBelow >= soilPumpOffAbove) {
+        soilPumpOnBelow = (soilPumpOffAbove - 5).clamp(0, 100).toDouble();
+      }
     });
   }
 
@@ -437,6 +540,16 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
               const SizedBox(height: 24),
               Text(
+                'Cấu Hình Tưới Theo Cây',
+                style: textTheme.titleLarge?.copyWith(
+                  fontWeight: FontWeight.bold,
+                  color: colorScheme.onSurface,
+                ),
+              ),
+              const SizedBox(height: 16),
+              _buildGardenConfigCard(colorScheme, textTheme),
+              const SizedBox(height: 24),
+              Text(
                 'Điều Khiển Máy Bơm',
                 style: textTheme.titleLarge?.copyWith(
                   fontWeight: FontWeight.bold,
@@ -514,6 +627,114 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ),
       ),
+    );
+  }
+
+  Widget _buildGardenConfigCard(ColorScheme colorScheme, TextTheme textTheme) {
+    return Card(
+      elevation: 0,
+      color: colorScheme.surfaceContainerHighest,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            DropdownButtonFormField<String>(
+              key: ValueKey(plantType),
+              initialValue: plantType,
+              decoration: const InputDecoration(
+                labelText: 'Loại cây',
+                prefixIcon: Icon(Icons.eco_rounded),
+              ),
+              items: _plantTypes
+                  .map(
+                    (type) => DropdownMenuItem(value: type, child: Text(type)),
+                  )
+                  .toList(),
+              onChanged: (value) {
+                if (value == null) {
+                  return;
+                }
+                setState(() => plantType = value);
+              },
+            ),
+            const SizedBox(height: 12),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              value: autoPumpEnabled,
+              onChanged: (value) => setState(() => autoPumpEnabled = value),
+              title: const Text('Tự bật/tắt bơm theo độ ẩm đất'),
+              secondary: const Icon(Icons.auto_mode_rounded),
+            ),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              value: aiRecommend,
+              onChanged: (value) => setState(() => aiRecommend = value),
+              title: const Text('AI gợi ý theo loại cây'),
+              secondary: const Icon(Icons.psychology_rounded),
+            ),
+            const SizedBox(height: 8),
+            _buildThresholdSlider(
+              textTheme: textTheme,
+              colorScheme: colorScheme,
+              label: 'Bật bơm khi đất <= ${soilPumpOnBelow.round()}%',
+              value: soilPumpOnBelow,
+              onChanged: _setPumpOnThreshold,
+            ),
+            _buildThresholdSlider(
+              textTheme: textTheme,
+              colorScheme: colorScheme,
+              label: 'Tắt bơm khi đất >= ${soilPumpOffAbove.round()}%',
+              value: soilPumpOffAbove,
+              onChanged: _setPumpOffThreshold,
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              children: [
+                FilledButton.icon(
+                  onPressed: isConnected ? _publishGardenConfig : null,
+                  icon: const Icon(Icons.save_rounded),
+                  label: const Text('Lưu cấu hình'),
+                ),
+                OutlinedButton.icon(
+                  onPressed: isConnected ? _requestAIRecommendation : null,
+                  icon: const Icon(Icons.tips_and_updates_rounded),
+                  label: const Text('Gợi ý AI'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildThresholdSlider({
+    required TextTheme textTheme,
+    required ColorScheme colorScheme,
+    required String label,
+    required double value,
+    required ValueChanged<double> onChanged,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: textTheme.labelLarge?.copyWith(color: colorScheme.onSurface),
+        ),
+        Slider(
+          value: value.clamp(0, 100).toDouble(),
+          min: 0,
+          max: 100,
+          divisions: 100,
+          label: '${value.round()}%',
+          onChanged: onChanged,
+        ),
+      ],
     );
   }
 
