@@ -55,17 +55,20 @@ type AppConfig struct {
 	SoilPumpOffAbove  float64
 	PlantType         string
 	AIRecommend       bool
+	ManualOffPause    time.Duration
 	WeatherLat        float64
 	WeatherLon        float64
 }
 
 type GardenConfigState struct {
-	AutoPumpEnabled  bool    `json:"auto_pump_enabled"`
-	SoilPumpOnBelow  float64 `json:"soil_pump_on_below"`
-	SoilPumpOffAbove float64 `json:"soil_pump_off_above"`
-	PlantType        string  `json:"plant_type"`
-	AIRecommend      bool    `json:"ai_recommend"`
-	Source           string  `json:"source"`
+	AutoPumpEnabled   bool    `json:"auto_pump_enabled"`
+	SoilPumpOnBelow   float64 `json:"soil_pump_on_below"`
+	SoilPumpOffAbove  float64 `json:"soil_pump_off_above"`
+	PlantType         string  `json:"plant_type"`
+	AIRecommend       bool    `json:"ai_recommend"`
+	ManualOffResumeAt string  `json:"manual_off_resume_at,omitempty"`
+	ManualOffPauseMin int     `json:"manual_off_pause_minutes"`
+	Source            string  `json:"source"`
 }
 
 type GardenConfigUpdate struct {
@@ -130,9 +133,10 @@ type BackendLogicHook struct {
 	httpClient *http.Client
 	history    *mongo.Collection
 
-	mu      sync.Mutex
-	pending []sensorEnvelope
-	pumpOn  bool
+	mu                sync.Mutex
+	pending           []sensorEnvelope
+	pumpOn            bool
+	manualOffResumeAt time.Time
 }
 
 func (h *BackendLogicHook) ID() string {
@@ -223,13 +227,20 @@ func (h *BackendLogicHook) gardenConfigState(source string) GardenConfigState {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
+	manualOffResumeAt := ""
+	if !h.manualOffResumeAt.IsZero() && time.Now().Before(h.manualOffResumeAt) {
+		manualOffResumeAt = h.manualOffResumeAt.Format(time.RFC3339)
+	}
+
 	return GardenConfigState{
-		AutoPumpEnabled:  h.cfg.AutoPumpEnabled,
-		SoilPumpOnBelow:  h.cfg.SoilPumpOnBelow,
-		SoilPumpOffAbove: h.cfg.SoilPumpOffAbove,
-		PlantType:        h.cfg.PlantType,
-		AIRecommend:      h.cfg.AIRecommend,
-		Source:           source,
+		AutoPumpEnabled:   h.cfg.AutoPumpEnabled,
+		SoilPumpOnBelow:   h.cfg.SoilPumpOnBelow,
+		SoilPumpOffAbove:  h.cfg.SoilPumpOffAbove,
+		PlantType:         h.cfg.PlantType,
+		AIRecommend:       h.cfg.AIRecommend,
+		ManualOffResumeAt: manualOffResumeAt,
+		ManualOffPauseMin: int(h.cfg.ManualOffPause / time.Minute),
+		Source:            source,
 	}
 }
 
@@ -306,11 +317,39 @@ func (h *BackendLogicHook) processPumpControlMessage(clientID string, payload []
 		return
 	}
 
+	manualCommand := isManualPumpCommandClient(clientID)
+	var manualResumeAt time.Time
+
 	h.mu.Lock()
 	h.pumpOn = command == "ON"
+	if manualCommand {
+		if command == "OFF" && h.cfg.ManualOffPause > 0 {
+			h.manualOffResumeAt = time.Now().Add(h.cfg.ManualOffPause)
+			manualResumeAt = h.manualOffResumeAt
+		} else if command == "ON" {
+			h.manualOffResumeAt = time.Time{}
+		}
+	}
 	h.mu.Unlock()
 
 	log.Printf("[Backend] pump control from %s: %s", clientID, command)
+	if manualCommand && !manualResumeAt.IsZero() {
+		log.Printf("[Backend] manual OFF pauses auto pump until %s", manualResumeAt.Format(time.RFC3339))
+		h.publishGardenConfigState("manual_off")
+	} else if manualCommand && command == "ON" {
+		h.publishGardenConfigState("manual_on")
+	}
+}
+
+func isManualPumpCommandClient(clientID string) bool {
+	clientID = strings.TrimSpace(clientID)
+	if clientID == "" || clientID == mqtt.InlineClientId {
+		return false
+	}
+	if clientID == "esp32-s3-sensor-gateway" {
+		return false
+	}
+	return true
 }
 
 func (h *BackendLogicHook) processSensorMessage(clientID string, payload []byte) {
@@ -458,14 +497,37 @@ func (h *BackendLogicHook) processSensorBatch(batch []sensorEnvelope) {
 }
 
 func (h *BackendLogicHook) decidePumpCommand(soilMoisture float64) string {
+	now := time.Now()
+	resumedFromManualOff := false
+
 	h.mu.Lock()
 	autoPumpEnabled := h.cfg.AutoPumpEnabled
 	onBelow := h.cfg.SoilPumpOnBelow
 	offAbove := h.cfg.SoilPumpOffAbove
+	manualOffResumeAt := h.manualOffResumeAt
+	if !manualOffResumeAt.IsZero() && !now.Before(manualOffResumeAt) {
+		h.manualOffResumeAt = time.Time{}
+		manualOffResumeAt = time.Time{}
+		resumedFromManualOff = true
+	}
 	h.mu.Unlock()
 
 	if !autoPumpEnabled {
 		log.Printf("[Backend] auto pump disabled (soil=%.1f%%)", soilMoisture)
+		return ""
+	}
+
+	if resumedFromManualOff {
+		log.Printf("[Backend] manual OFF pause expired, auto pump resumed")
+		h.publishGardenConfigState("manual_off_expired")
+	}
+
+	if !manualOffResumeAt.IsZero() && now.Before(manualOffResumeAt) {
+		log.Printf(
+			"[Backend] auto pump paused by manual OFF until %s (soil=%.1f%%)",
+			manualOffResumeAt.Format(time.RFC3339),
+			soilMoisture,
+		)
 		return ""
 	}
 
@@ -890,6 +952,7 @@ func loadConfig() AppConfig {
 		SoilPumpOffAbove:  envFloatOrDefault("SOIL_PUMP_OFF_ABOVE", 45),
 		PlantType:         normalizePlantType(envOrDefault("PLANT_TYPE", "cây cảnh")),
 		AIRecommend:       envBoolOrDefault("AI_RECOMMEND", true),
+		ManualOffPause:    time.Duration(envIntOrDefault("MANUAL_OFF_AUTO_RESUME_MINUTES", 60)) * time.Minute,
 		WeatherLat:        envFloatOrDefault("WEATHER_LAT", 10.847519),
 		WeatherLon:        envFloatOrDefault("WEATHER_LON", 106.673947),
 	}
@@ -1020,7 +1083,7 @@ func main() {
 	}()
 	fmt.Printf("GARDEN SERVER: MQTT broker started on %s\n", listenAddress)
 	fmt.Printf("Sensor batching: %d samples/request\n", cfg.SensorBatchSize)
-	fmt.Printf("Auto pump: %t (plant=%s, AI=%t, ON <= %.1f%%, OFF >= %.1f%%)\n", cfg.AutoPumpEnabled, cfg.PlantType, cfg.AIRecommend, cfg.SoilPumpOnBelow, cfg.SoilPumpOffAbove)
+	fmt.Printf("Auto pump: %t (plant=%s, AI=%t, ON <= %.1f%%, OFF >= %.1f%%, manual OFF pause=%s)\n", cfg.AutoPumpEnabled, cfg.PlantType, cfg.AIRecommend, cfg.SoilPumpOnBelow, cfg.SoilPumpOffAbove, cfg.ManualOffPause)
 	fmt.Printf("Weather location: lat=%.6f lon=%.6f\n", cfg.WeatherLat, cfg.WeatherLon)
 
 	sigs := make(chan os.Signal, 1)

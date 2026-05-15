@@ -61,6 +61,7 @@ class _HomeScreenState extends State<HomeScreen> {
   double soilPumpOnBelow = 35;
   double soilPumpOffAbove = 45;
   String plantType = 'cây cảnh';
+  String? manualOffResumeAt;
   String weatherSummary = 'Chưa có dữ liệu';
   String aiSuggestion = 'Chưa có gợi ý';
 
@@ -273,6 +274,8 @@ class _HomeScreenState extends State<HomeScreen> {
         soilPumpOffAbove =
             (config['soil_pump_off_above'] as num? ?? soilPumpOffAbove)
                 .toDouble();
+        final resumeAt = (config['manual_off_resume_at'] ?? '').toString();
+        manualOffResumeAt = resumeAt.isEmpty ? null : resumeAt;
       });
     } catch (e) {
       debugPrint('Garden config JSON parse error: $e');
@@ -675,6 +678,15 @@ class _HomeScreenState extends State<HomeScreen> {
               title: const Text('AI gợi ý theo loại cây'),
               secondary: const Icon(Icons.psychology_rounded),
             ),
+            if (manualOffResumeAt != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                'Đang tắt tay, auto tưới sẽ bật lại sau $manualOffResumeAt',
+                style: textTheme.bodyMedium?.copyWith(
+                  color: colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ],
             const SizedBox(height: 8),
             _buildThresholdSlider(
               textTheme: textTheme,
