@@ -644,23 +644,54 @@ class _HomeScreenState extends State<HomeScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            DropdownButtonFormField<String>(
-              key: ValueKey(plantType),
-              initialValue: plantType,
-              decoration: const InputDecoration(
-                labelText: 'Loại cây',
-                prefixIcon: Icon(Icons.eco_rounded),
-              ),
-              items: _plantTypes
-                  .map(
-                    (type) => DropdownMenuItem(value: type, child: Text(type)),
-                  )
-                  .toList(),
-              onChanged: (value) {
-                if (value == null) {
-                  return;
-                }
-                setState(() => plantType = value);
+            LayoutBuilder(
+              builder: (context, constraints) {
+                return DropdownMenu<String>(
+                  key: ValueKey(plantType),
+                  initialSelection: plantType,
+                  width: constraints.maxWidth,
+                  leadingIcon: const Icon(Icons.eco_rounded),
+                  label: const Text('Loại cây'),
+                  textStyle: textTheme.bodyLarge?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
+                  trailingIcon: Icon(
+                    Icons.keyboard_arrow_down_rounded,
+                    color: colorScheme.primary,
+                  ),
+                  selectedTrailingIcon: Icon(
+                    Icons.keyboard_arrow_up_rounded,
+                    color: colorScheme.primary,
+                  ),
+                  menuStyle: MenuStyle(
+                    backgroundColor: WidgetStatePropertyAll(
+                      colorScheme.surfaceContainer,
+                    ),
+                    surfaceTintColor: WidgetStatePropertyAll(
+                      colorScheme.primary,
+                    ),
+                    elevation: const WidgetStatePropertyAll(3),
+                    shadowColor: WidgetStatePropertyAll(
+                      colorScheme.shadow.withValues(alpha: 0.18),
+                    ),
+                    shape: WidgetStatePropertyAll(
+                      RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(24),
+                      ),
+                    ),
+                  ),
+                  dropdownMenuEntries: _plantTypes
+                      .map(
+                        (type) => DropdownMenuEntry(value: type, label: type),
+                      )
+                      .toList(),
+                  onSelected: (value) {
+                    if (value == null) {
+                      return;
+                    }
+                    setState(() => plantType = value);
+                  },
+                );
               },
             ),
             const SizedBox(height: 12),
