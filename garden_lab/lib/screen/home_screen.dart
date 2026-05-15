@@ -324,7 +324,8 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
-    final builder = MqttClientPayloadBuilder()..addString(jsonEncode(payload));
+    final builder = MqttClientPayloadBuilder()
+      ..addUTF8String(jsonEncode(payload));
     client.publishMessage(topic, MqttQos.atLeastOnce, builder.payload!);
   }
 
