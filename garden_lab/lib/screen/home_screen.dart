@@ -3,6 +3,8 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:garden_lab/model/pump_history_event.dart';
+import 'package:garden_lab/screen/pump_history_screen.dart';
 import 'package:mqtt_client/mqtt_client.dart';
 import 'package:mqtt_client/mqtt_server_client.dart';
 
@@ -17,6 +19,9 @@ const _configuredMqttPort = int.fromEnvironment(
 const _mqttRetryInterval = Duration(seconds: 5);
 const _topicSensorData = 'garden/sensor/data';
 const _topicPumpControl = 'garden/control/pump';
+const _topicPumpHistory = 'garden/pump/history';
+const _topicPumpHistoryGet = 'garden/pump/history/get';
+const _topicPumpHistoryState = 'garden/pump/history/state';
 const _topicAIInsight = 'garden/ai/insight';
 const _topicGardenConfigSet = 'garden/config/set';
 const _topicGardenConfigGet = 'garden/config/get';
@@ -51,6 +56,7 @@ class _HomeScreenState extends State<HomeScreen> {
   MqttConnectionPhase _connectionPhase = MqttConnectionPhase.disconnected;
   String? _connectionError;
   int _connectAttempt = 0;
+  int _selectedPageIndex = 0;
 
   double temperature = 0.0;
   double humidity = 0.0;
@@ -64,6 +70,7 @@ class _HomeScreenState extends State<HomeScreen> {
   String? manualOffResumeAt;
   String weatherSummary = 'Chưa có dữ liệu';
   String aiSuggestion = 'Chưa có gợi ý';
+  List<PumpHistoryEvent> pumpHistoryEvents = const [];
 
   bool get isConnected => _connectionPhase == MqttConnectionPhase.connected;
   bool get isConnecting => _connectionPhase == MqttConnectionPhase.connecting;
@@ -152,6 +159,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _subscribeToTopics(nextClient);
       _listenForMqttUpdates(nextClient);
       _requestGardenConfig(nextClient);
+      _requestPumpHistory(nextClient);
 
       setState(() {
         _connectionPhase = MqttConnectionPhase.connected;
@@ -169,6 +177,8 @@ class _HomeScreenState extends State<HomeScreen> {
   void _subscribeToTopics(MqttServerClient client) {
     client.subscribe(_topicSensorData, MqttQos.atMostOnce);
     client.subscribe(_topicPumpControl, MqttQos.atMostOnce);
+    client.subscribe(_topicPumpHistory, MqttQos.atLeastOnce);
+    client.subscribe(_topicPumpHistoryState, MqttQos.atLeastOnce);
     client.subscribe(_topicAIInsight, MqttQos.atMostOnce);
     client.subscribe(_topicGardenConfigState, MqttQos.atLeastOnce);
   }
@@ -201,6 +211,12 @@ class _HomeScreenState extends State<HomeScreen> {
             break;
           case _topicPumpControl:
             _handlePumpPayload(payload);
+            break;
+          case _topicPumpHistory:
+            _handlePumpHistoryPayload(payload);
+            break;
+          case _topicPumpHistoryState:
+            _handlePumpHistoryStatePayload(payload);
             break;
           case _topicAIInsight:
             _handleInsightPayload(payload);
@@ -239,6 +255,49 @@ class _HomeScreenState extends State<HomeScreen> {
 
     setState(() {
       isPumpOn = command == 'ON';
+    });
+  }
+
+  void _handlePumpHistoryPayload(String payload) {
+    try {
+      final data = jsonDecode(payload) as Map<String, dynamic>;
+      _mergePumpHistoryEvent(PumpHistoryEvent.fromJson(data));
+    } catch (e) {
+      debugPrint('Pump history JSON parse error: $e');
+    }
+  }
+
+  void _handlePumpHistoryStatePayload(String payload) {
+    try {
+      final data = jsonDecode(payload) as Map<String, dynamic>;
+      final rawEvents = data['events'];
+      if (rawEvents is! List) {
+        return;
+      }
+
+      final events =
+          rawEvents
+              .whereType<Map<String, dynamic>>()
+              .map(PumpHistoryEvent.fromJson)
+              .toList()
+            ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
+
+      setState(() {
+        pumpHistoryEvents = events.take(100).toList();
+      });
+    } catch (e) {
+      debugPrint('Pump history state JSON parse error: $e');
+    }
+  }
+
+  void _mergePumpHistoryEvent(PumpHistoryEvent event) {
+    final nextEvents = [
+      event,
+      ...pumpHistoryEvents.where((item) => item.id != event.id),
+    ]..sort((a, b) => b.timestamp.compareTo(a.timestamp));
+
+    setState(() {
+      pumpHistoryEvents = nextEvents.take(100).toList();
     });
   }
 
@@ -346,6 +405,26 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  Future<void> _requestPumpHistory([MqttServerClient? mqttClient]) async {
+    final client = mqttClient ?? _client;
+    if (client == null) {
+      return;
+    }
+
+    final builder = MqttClientPayloadBuilder()..addUTF8String('{}');
+    client.publishMessage(
+      _topicPumpHistoryGet,
+      MqttQos.atLeastOnce,
+      builder.payload!,
+    );
+  }
+
+  void _clearLocalPumpHistory() {
+    setState(() {
+      pumpHistoryEvents = const [];
+    });
+  }
+
   void _publishGardenConfig() {
     _publishJsonTopic(_topicGardenConfigSet, {
       'auto_pump_enabled': autoPumpEnabled,
@@ -403,7 +482,11 @@ class _HomeScreenState extends State<HomeScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Hệ Thống Tưới Tự Động'),
+        title: Text(
+          _selectedPageIndex == 0
+              ? 'Hệ Thống Tưới Tự Động'
+              : 'Lịch Sử Bơm Nước',
+        ),
         centerTitle: true,
         actions: [
           Padding(
@@ -412,225 +495,272 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ],
       ),
-      body: RefreshIndicator(
-        onRefresh: _manualRefresh,
-        child: SingleChildScrollView(
-          physics: const AlwaysScrollableScrollPhysics(),
-          padding: const EdgeInsets.all(16.0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              if (!isConnected) ...[
-                _buildConnectionBanner(colorScheme, textTheme),
-                const SizedBox(height: 24),
-              ],
-              Text(
-                'Trạng Thái Vườn',
-                style: textTheme.titleLarge?.copyWith(
-                  fontWeight: FontWeight.bold,
-                  color: colorScheme.onSurface,
-                ),
-              ),
-              const SizedBox(height: 16),
-              Row(
-                children: [
-                  Expanded(
-                    child: _buildSensorCard(
-                      context,
-                      title: 'Nhiệt Độ',
-                      value: '${temperature.toStringAsFixed(1)}°C',
-                      icon: Icons.thermostat_rounded,
-                      containerColor: colorScheme.errorContainer,
-                      onContainerColor: colorScheme.onErrorContainer,
-                    ),
-                  ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: _buildSensorCard(
-                      context,
-                      title: 'Độ Ẩm',
-                      value: '${humidity.toStringAsFixed(1)}%',
-                      icon: Icons.water_drop_rounded,
-                      containerColor: colorScheme.tertiaryContainer,
-                      onContainerColor: colorScheme.onTertiaryContainer,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              _buildSensorCard(
-                context,
-                title: 'Độ Ẩm Đất',
-                value: '$soilMoisture%',
-                icon: Icons.grass_rounded,
-                containerColor: colorScheme.primaryContainer,
-                onContainerColor: colorScheme.onPrimaryContainer,
-              ),
-              const SizedBox(height: 24),
-              Text(
-                'AI & Thời Tiết',
-                style: textTheme.titleLarge?.copyWith(
-                  fontWeight: FontWeight.bold,
-                  color: colorScheme.onSurface,
-                ),
-              ),
-              const SizedBox(height: 16),
-              Card(
-                elevation: 0,
-                color: colorScheme.secondaryContainer,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(24),
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.all(20),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Icon(
-                            Icons.cloud_rounded,
-                            color: colorScheme.onSecondaryContainer,
-                          ),
-                          const SizedBox(width: 12),
-                          Text(
-                            'Thời Tiết',
-                            style: textTheme.titleMedium?.copyWith(
-                              fontWeight: FontWeight.w700,
-                              color: colorScheme.onSecondaryContainer,
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        weatherSummary,
-                        style: textTheme.bodyLarge?.copyWith(
-                          color: colorScheme.onSecondaryContainer.withValues(
-                            alpha: 0.9,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 20),
-                      Row(
-                        children: [
-                          Icon(
-                            Icons.psychology_rounded,
-                            color: colorScheme.onSecondaryContainer,
-                          ),
-                          const SizedBox(width: 12),
-                          Text(
-                            'Gợi Ý Từ AI',
-                            style: textTheme.titleMedium?.copyWith(
-                              fontWeight: FontWeight.w700,
-                              color: colorScheme.onSecondaryContainer,
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        aiSuggestion,
-                        style: textTheme.bodyLarge?.copyWith(
-                          color: colorScheme.onSecondaryContainer.withValues(
-                            alpha: 0.9,
-                          ),
-                          height: 1.5,
-                        ),
-                      ),
+      drawer: _buildNavigationDrawer(colorScheme),
+      body: _selectedPageIndex == 0
+          ? RefreshIndicator(
+              onRefresh: _manualRefresh,
+              child: SingleChildScrollView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.all(16.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    if (!isConnected) ...[
+                      _buildConnectionBanner(colorScheme, textTheme),
+                      const SizedBox(height: 24),
                     ],
-                  ),
-                ),
-              ),
-              const SizedBox(height: 24),
-              Text(
-                'Cấu Hình Tưới Theo Cây',
-                style: textTheme.titleLarge?.copyWith(
-                  fontWeight: FontWeight.bold,
-                  color: colorScheme.onSurface,
-                ),
-              ),
-              const SizedBox(height: 16),
-              _buildGardenConfigCard(colorScheme, textTheme),
-              const SizedBox(height: 24),
-              Text(
-                'Điều Khiển Máy Bơm',
-                style: textTheme.titleLarge?.copyWith(
-                  fontWeight: FontWeight.bold,
-                  color: colorScheme.onSurface,
-                ),
-              ),
-              const SizedBox(height: 16),
-              Card(
-                elevation: 0,
-                color: isPumpOn
-                    ? colorScheme.primaryContainer
-                    : colorScheme.surfaceContainerHighest,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(24),
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 20,
-                    vertical: 20,
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Expanded(
-                        child: Row(
+                    Text(
+                      'Trạng Thái Vườn',
+                      style: textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.bold,
+                        color: colorScheme.onSurface,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _buildSensorCard(
+                            context,
+                            title: 'Nhiệt Độ',
+                            value: '${temperature.toStringAsFixed(1)}°C',
+                            icon: Icons.thermostat_rounded,
+                            containerColor: colorScheme.errorContainer,
+                            onContainerColor: colorScheme.onErrorContainer,
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: _buildSensorCard(
+                            context,
+                            title: 'Độ Ẩm',
+                            value: '${humidity.toStringAsFixed(1)}%',
+                            icon: Icons.water_drop_rounded,
+                            containerColor: colorScheme.tertiaryContainer,
+                            onContainerColor: colorScheme.onTertiaryContainer,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    _buildSensorCard(
+                      context,
+                      title: 'Độ Ẩm Đất',
+                      value: '$soilMoisture%',
+                      icon: Icons.grass_rounded,
+                      containerColor: colorScheme.primaryContainer,
+                      onContainerColor: colorScheme.onPrimaryContainer,
+                    ),
+                    const SizedBox(height: 24),
+                    Text(
+                      'AI & Thời Tiết',
+                      style: textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.bold,
+                        color: colorScheme.onSurface,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    Card(
+                      elevation: 0,
+                      color: colorScheme.secondaryContainer,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(24),
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.all(20),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Icon(
-                              Icons.water_drop_rounded,
-                              color: isPumpOn
-                                  ? colorScheme.onPrimaryContainer
-                                  : colorScheme.onSurfaceVariant,
-                              size: 32,
+                            Row(
+                              children: [
+                                Icon(
+                                  Icons.cloud_rounded,
+                                  color: colorScheme.onSecondaryContainer,
+                                ),
+                                const SizedBox(width: 12),
+                                Text(
+                                  'Thời Tiết',
+                                  style: textTheme.titleMedium?.copyWith(
+                                    fontWeight: FontWeight.w700,
+                                    color: colorScheme.onSecondaryContainer,
+                                  ),
+                                ),
+                              ],
                             ),
-                            const SizedBox(width: 16),
-                            Flexible(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    'Máy Bơm Nước',
-                                    style: textTheme.titleMedium?.copyWith(
-                                      fontWeight: FontWeight.bold,
-                                      color: isPumpOn
-                                          ? colorScheme.onPrimaryContainer
-                                          : colorScheme.onSurfaceVariant,
-                                    ),
+                            const SizedBox(height: 8),
+                            Text(
+                              weatherSummary,
+                              style: textTheme.bodyLarge?.copyWith(
+                                color: colorScheme.onSecondaryContainer
+                                    .withValues(alpha: 0.9),
+                              ),
+                            ),
+                            const SizedBox(height: 20),
+                            Row(
+                              children: [
+                                Icon(
+                                  Icons.psychology_rounded,
+                                  color: colorScheme.onSecondaryContainer,
+                                ),
+                                const SizedBox(width: 12),
+                                Text(
+                                  'Gợi Ý Từ AI',
+                                  style: textTheme.titleMedium?.copyWith(
+                                    fontWeight: FontWeight.w700,
+                                    color: colorScheme.onSecondaryContainer,
                                   ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    isConnected
-                                        ? (isPumpOn ? 'Đang tưới' : 'Đã tắt')
-                                        : 'Chờ kết nối MQTT',
-                                    style: textTheme.bodyMedium?.copyWith(
-                                      color: isPumpOn
-                                          ? colorScheme.onPrimaryContainer
-                                          : colorScheme.onSurfaceVariant,
-                                    ),
-                                  ),
-                                ],
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              aiSuggestion,
+                              style: textTheme.bodyLarge?.copyWith(
+                                color: colorScheme.onSecondaryContainer
+                                    .withValues(alpha: 0.9),
+                                height: 1.5,
                               ),
                             ),
                           ],
                         ),
                       ),
-                      Switch(
-                        value: isPumpOn,
-                        onChanged: isConnected ? _togglePump : null,
+                    ),
+                    const SizedBox(height: 24),
+                    Text(
+                      'Cấu Hình Tưới Theo Cây',
+                      style: textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.bold,
+                        color: colorScheme.onSurface,
                       ),
-                    ],
-                  ),
+                    ),
+                    const SizedBox(height: 16),
+                    _buildGardenConfigCard(colorScheme, textTheme),
+                    const SizedBox(height: 24),
+                    Text(
+                      'Điều Khiển Máy Bơm',
+                      style: textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.bold,
+                        color: colorScheme.onSurface,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    Card(
+                      elevation: 0,
+                      color: isPumpOn
+                          ? colorScheme.primaryContainer
+                          : colorScheme.surfaceContainerHighest,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(24),
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 20,
+                          vertical: 20,
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Expanded(
+                              child: Row(
+                                children: [
+                                  Icon(
+                                    Icons.water_drop_rounded,
+                                    color: isPumpOn
+                                        ? colorScheme.onPrimaryContainer
+                                        : colorScheme.onSurfaceVariant,
+                                    size: 32,
+                                  ),
+                                  const SizedBox(width: 16),
+                                  Flexible(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          'Máy Bơm Nước',
+                                          style: textTheme.titleMedium
+                                              ?.copyWith(
+                                                fontWeight: FontWeight.bold,
+                                                color: isPumpOn
+                                                    ? colorScheme
+                                                          .onPrimaryContainer
+                                                    : colorScheme
+                                                          .onSurfaceVariant,
+                                              ),
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          isConnected
+                                              ? (isPumpOn
+                                                    ? 'Đang tưới'
+                                                    : 'Đã tắt')
+                                              : 'Chờ kết nối MQTT',
+                                          style: textTheme.bodyMedium?.copyWith(
+                                            color: isPumpOn
+                                                ? colorScheme.onPrimaryContainer
+                                                : colorScheme.onSurfaceVariant,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            Switch(
+                              value: isPumpOn,
+                              onChanged: isConnected ? _togglePump : null,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 32),
+                  ],
                 ),
               ),
-              const SizedBox(height: 32),
-            ],
+            )
+          : PumpHistoryScreen(
+              events: pumpHistoryEvents,
+              isConnected: isConnected,
+              onRefresh: _requestPumpHistory,
+              onClear: _clearLocalPumpHistory,
+            ),
+    );
+  }
+
+  Widget _buildNavigationDrawer(ColorScheme colorScheme) {
+    return NavigationDrawer(
+      selectedIndex: _selectedPageIndex,
+      onDestinationSelected: (index) {
+        setState(() => _selectedPageIndex = index);
+        Navigator.of(context).pop();
+        if (index == 1) {
+          _requestPumpHistory();
+        }
+      },
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(28, 24, 16, 12),
+          child: Text(
+            'Garden Lab',
+            style: Theme.of(context).textTheme.titleLarge?.copyWith(
+              fontWeight: FontWeight.bold,
+              color: colorScheme.primary,
+            ),
           ),
         ),
-      ),
+        const NavigationDrawerDestination(
+          icon: Icon(Icons.dashboard_outlined),
+          selectedIcon: Icon(Icons.dashboard_rounded),
+          label: Text('Dashboard'),
+        ),
+        const NavigationDrawerDestination(
+          icon: Icon(Icons.history_rounded),
+          selectedIcon: Icon(Icons.history_toggle_off_rounded),
+          label: Text('Lịch sử bơm'),
+        ),
+      ],
     );
   }
 

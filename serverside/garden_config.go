@@ -147,6 +147,7 @@ func (h *BackendLogicHook) processPumpControlMessage(clientID string, payload []
 	}
 
 	manualCommand := isManualPumpCommandClient(clientID)
+	source := pumpCommandSource(clientID, manualCommand)
 	var manualResumeAt time.Time
 
 	h.mu.Lock()
@@ -162,11 +163,48 @@ func (h *BackendLogicHook) processPumpControlMessage(clientID string, payload []
 	h.mu.Unlock()
 
 	log.Printf("[Backend] pump control from %s: %s", clientID, command)
+	h.recordPumpHistory(PumpHistoryEvent{
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		State:     command,
+		Source:    source,
+		ClientID:  clientID,
+		Reason:    pumpCommandReason(command, source),
+		Manual:    manualCommand,
+	})
 	if manualCommand && !manualResumeAt.IsZero() {
 		log.Printf("[Backend] manual OFF pauses auto pump until %s", manualResumeAt.Format(time.RFC3339))
 		h.publishGardenConfigState("manual_off")
 	} else if manualCommand && command == "ON" {
 		h.publishGardenConfigState("manual_on")
+	}
+}
+
+func pumpCommandSource(clientID string, manualCommand bool) string {
+	if manualCommand {
+		return "manual"
+	}
+	if clientID == mqtt.InlineClientId {
+		return "auto"
+	}
+	if clientID == "esp32-s3-sensor-gateway" {
+		return "device"
+	}
+	return "mqtt"
+}
+
+func pumpCommandReason(command string, source string) string {
+	switch source {
+	case "manual":
+		if command == "OFF" {
+			return "Tắt thủ công từ app"
+		}
+		return "Bật thủ công từ app"
+	case "auto":
+		return "Server tự động điều khiển theo độ ẩm đất"
+	case "device":
+		return "Thiết bị gateway báo/truyền lệnh"
+	default:
+		return "Lệnh MQTT"
 	}
 }
 

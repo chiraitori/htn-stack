@@ -50,6 +50,19 @@ type GardenConfigUpdate struct {
 	AIRecommend      *bool    `json:"ai_recommend"`
 }
 
+type PumpHistoryEvent struct {
+	Timestamp string `json:"timestamp"`
+	State     string `json:"state"`
+	Source    string `json:"source"`
+	ClientID  string `json:"client_id"`
+	Reason    string `json:"reason,omitempty"`
+	Manual    bool   `json:"manual"`
+}
+
+type PumpHistoryState struct {
+	Events []PumpHistoryEvent `json:"events"`
+}
+
 type PlantProfile struct {
 	PlantType        string
 	SoilPumpOnBelow  float64
@@ -107,5 +120,6 @@ type BackendLogicHook struct {
 	mu                sync.Mutex
 	pending           []sensorEnvelope
 	pumpOn            bool
+	pumpHistory       []PumpHistoryEvent
 	manualOffResumeAt time.Time
 }
