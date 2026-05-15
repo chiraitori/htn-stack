@@ -184,8 +184,6 @@ func (h *BackendLogicHook) processPumpStatusMessage(clientID string, payload []b
 	var status struct {
 		NodeID string `json:"node_id"`
 		State  string `json:"state"`
-		Mac    string `json:"mac"`
-		Reason string `json:"reason"`
 	}
 	if err := json.Unmarshal(payload, &status); err != nil {
 		log.Printf("[Backend] invalid pump status from %s: %v", clientID, err)
@@ -207,36 +205,14 @@ func (h *BackendLogicHook) processPumpStatusMessage(clientID string, payload []b
 	h.pumpOn = state == "ON"
 	h.mu.Unlock()
 
-	reason := strings.TrimSpace(status.Reason)
-	if reason == "" {
-		reason = "C3 xác nhận relay " + nodeID
-	}
-
-	h.recordPumpHistory(PumpHistoryEvent{
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
-		State:     state,
-		Source:    "device",
-		ClientID:  clientID,
-		NodeID:    nodeID,
-		Mac:       strings.TrimSpace(status.Mac),
-		Reason:    reason,
-		Confirmed: true,
-		Manual:    false,
-	})
-	log.Printf("[Backend] pump relay status from %s: node=%s state=%s", clientID, nodeID, state)
+	log.Printf("[Backend] pump relay live status from %s: node=%s state=%s", clientID, nodeID, state)
 }
 
 func pumpCommandSource(clientID string, manualCommand bool) string {
-	if manualCommand {
-		return "manual"
-	}
 	if clientID == mqtt.InlineClientId {
 		return "auto"
 	}
-	if clientID == "esp32-s3-sensor-gateway" {
-		return "device"
-	}
-	return "mqtt"
+	return "manual"
 }
 
 func pumpCommandReason(command string, source string) string {
@@ -248,10 +224,8 @@ func pumpCommandReason(command string, source string) string {
 		return "Bật thủ công từ app"
 	case "auto":
 		return "Server tự động điều khiển theo độ ẩm đất"
-	case "device":
-		return "Thiết bị gateway báo/truyền lệnh"
 	default:
-		return "Lệnh MQTT"
+		return "Điều khiển thủ công"
 	}
 }
 

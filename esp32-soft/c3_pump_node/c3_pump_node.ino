@@ -8,10 +8,10 @@
 
 const char *NODE_ID = "pump-1"; // Change the second board to "pump-2".
 
-// IMPORTANT: Avoid GPIO2, GPIO8, GPIO9 (strapping pins on C3).
-// GPIO3 is also used during boot and can glitch LOW, turning on an
-// active-low relay before setup() runs.  Use a safe GPIO instead.
-const uint8_t RELAY_PIN = 10;
+// Relay IN is wired to GPIO0 on the ESP32-C3 Super Mini.
+// Avoid GPIO3 here because it can glitch LOW during boot and turn on
+// active-low relay modules before setup() runs.
+const uint8_t RELAY_PIN = 0;
 const bool RELAY_ACTIVE_LOW = true;
 
 // Built-in LED on ESP32-C3 Super Mini (GPIO8, active LOW).
@@ -85,6 +85,7 @@ void ledWrite(bool on) {
 
 void handleGatewayTimeout() {
   gatewayConnected = false;
+  lastCommandSeq = 0;
   ledBlinkUntilMs = 0;
   ledWrite(false);
 
@@ -216,14 +217,19 @@ void handleEspNowReceive(const uint8_t *srcMac, const uint8_t *data, int len) {
     return;
   }
 
-  if (packet.seq <= lastCommandSeq) {
+  bool requestedPumpOn = packet.state == PUMP_ON;
+  if (packet.seq <= lastCommandSeq && requestedPumpOn == pumpOn) {
     Serial.printf("[ESP-NOW] duplicate/old seq=%lu ignored\n", static_cast<unsigned long>(packet.seq));
     sendStatus(srcMac, packet.seq);
     return;
   }
 
+  if (packet.seq <= lastCommandSeq) {
+    Serial.printf("[ESP-NOW] old seq=%lu accepted because state changed\n", static_cast<unsigned long>(packet.seq));
+  }
+
   lastCommandSeq = packet.seq;
-  setPump(packet.state == PUMP_ON);
+  setPump(requestedPumpOn);
   pendingFailsafeStatus = false;
   Serial.printf(
     "[ESP-NOW] command accepted target=%s state=%s seq=%lu\n",

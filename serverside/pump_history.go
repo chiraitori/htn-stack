@@ -13,6 +13,10 @@ import (
 const maxPumpHistoryEvents = 100
 
 func (h *BackendLogicHook) recordPumpHistory(event PumpHistoryEvent) {
+	if event.Source != "manual" && event.Source != "auto" {
+		return
+	}
+
 	h.mu.Lock()
 	h.pumpHistory = append([]PumpHistoryEvent{event}, h.pumpHistory...)
 	if len(h.pumpHistory) > maxPumpHistoryEvents {
@@ -72,6 +76,7 @@ func (h *BackendLogicHook) savePumpHistoryEvent(event PumpHistoryEvent) error {
 			"client_id": event.ClientID,
 			"node_id":   event.NodeID,
 			"mac":       event.Mac,
+			"seq":       event.Seq,
 			"reason":    event.Reason,
 			"confirmed": event.Confirmed,
 			"manual":    event.Manual,
@@ -113,7 +118,9 @@ func (h *BackendLogicHook) loadPumpHistory() {
 			log.Printf("[MongoDB] decode pump history failed: %v", err)
 			continue
 		}
-		if doc.PumpEvent.Timestamp == "" {
+		if doc.PumpEvent.Timestamp == "" ||
+			(doc.PumpEvent.Source != "manual" && doc.PumpEvent.Source != "auto") ||
+			isRedundantPumpHistoryEvent(events, doc.PumpEvent) {
 			continue
 		}
 		events = append(events, doc.PumpEvent)
@@ -127,4 +134,30 @@ func (h *BackendLogicHook) loadPumpHistory() {
 	h.pumpHistory = events
 	h.mu.Unlock()
 	log.Printf("[MongoDB] loaded %d pump history events", len(events))
+}
+
+func isRedundantPumpHistoryEvent(events []PumpHistoryEvent, next PumpHistoryEvent) bool {
+	if len(events) == 0 {
+		return false
+	}
+
+	previous := events[len(events)-1]
+	if previous.State != next.State ||
+		previous.Source != next.Source ||
+		previous.NodeID != next.NodeID ||
+		previous.Reason != next.Reason ||
+		previous.Confirmed != next.Confirmed {
+		return false
+	}
+
+	previousAt, previousErr := time.Parse(time.RFC3339, previous.Timestamp)
+	nextAt, nextErr := time.Parse(time.RFC3339, next.Timestamp)
+	if previousErr != nil || nextErr != nil {
+		return false
+	}
+
+	if previousAt.Before(nextAt) {
+		previousAt, nextAt = nextAt, previousAt
+	}
+	return previousAt.Sub(nextAt) <= 2*time.Minute
 }

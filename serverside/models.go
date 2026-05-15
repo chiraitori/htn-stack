@@ -57,6 +57,7 @@ type PumpHistoryEvent struct {
 	ClientID  string `json:"client_id" bson:"client_id"`
 	NodeID    string `json:"node_id,omitempty" bson:"node_id,omitempty"`
 	Mac       string `json:"mac,omitempty" bson:"mac,omitempty"`
+	Seq       uint32 `json:"seq,omitempty" bson:"seq,omitempty"`
 	Reason    string `json:"reason,omitempty" bson:"reason,omitempty"`
 	Confirmed bool   `json:"confirmed" bson:"confirmed"`
 	Manual    bool   `json:"manual" bson:"manual"`

@@ -186,15 +186,34 @@ func (h *BackendLogicHook) decidePumpCommand(soilMoisture float64) string {
 	}
 
 	command := ""
+	desiredPumpOn := false
+	stateChanged := false
 	h.mu.Lock()
 	if soilMoisture <= onBelow {
 		command = "ON"
-		h.pumpOn = true
+		desiredPumpOn = true
 	} else if soilMoisture >= offAbove {
 		command = "OFF"
-		h.pumpOn = false
+		desiredPumpOn = false
+	}
+	if command != "" {
+		stateChanged = h.pumpOn != desiredPumpOn
+		if stateChanged {
+			h.pumpOn = desiredPumpOn
+		}
 	}
 	h.mu.Unlock()
+
+	if command != "" && !stateChanged {
+		log.Printf(
+			"[Backend] pump already %s (soil=%.1f%%, ON <= %.1f%%, OFF >= %.1f%%)",
+			command,
+			soilMoisture,
+			onBelow,
+			offAbove,
+		)
+		return ""
+	}
 
 	if command == "" {
 		log.Printf(

@@ -164,13 +164,8 @@ class _PumpHistoryTile extends StatelessWidget {
     if (source == 'auto') {
       return 'Tự động';
     }
-    if (source == 'device') {
-      return eventLabelDevice;
-    }
-    return 'MQTT';
+    return 'Thủ công';
   }
-
-  static const eventLabelDevice = 'C3 xác nhận';
 
   static String _formatTime(DateTime time) {
     String two(int value) => value.toString().padLeft(2, '0');
