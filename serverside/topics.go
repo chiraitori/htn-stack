@@ -4,6 +4,7 @@ const (
 	topicSensorData      = "garden/sensor/data"
 	topicAIInsight       = "garden/ai/insight"
 	topicPumpControl     = "garden/control/pump"
+	topicPumpStatus      = "garden/pump/status"
 	topicPumpHistory     = "garden/pump/history"
 	topicPumpHistoryGet  = "garden/pump/history/get"
 	topicPumpHistoryList = "garden/pump/history/state"

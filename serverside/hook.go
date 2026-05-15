@@ -36,6 +36,8 @@ func (h *BackendLogicHook) OnPublished(cl *mqtt.Client, pk packets.Packet) {
 		go h.processSensorMessage(cl.ID, payloadCopy)
 	case topicPumpControl:
 		h.processPumpControlMessage(cl.ID, pk.Payload)
+	case topicPumpStatus:
+		h.processPumpStatusMessage(cl.ID, pk.Payload)
 	case topicPumpHistoryGet:
 		h.publishPumpHistoryState()
 	case topicPumpHistory, topicPumpHistoryList:

@@ -169,6 +169,7 @@ func (h *BackendLogicHook) processPumpControlMessage(clientID string, payload []
 		Source:    source,
 		ClientID:  clientID,
 		Reason:    pumpCommandReason(command, source),
+		Confirmed: false,
 		Manual:    manualCommand,
 	})
 	if manualCommand && !manualResumeAt.IsZero() {
@@ -177,6 +178,52 @@ func (h *BackendLogicHook) processPumpControlMessage(clientID string, payload []
 	} else if manualCommand && command == "ON" {
 		h.publishGardenConfigState("manual_on")
 	}
+}
+
+func (h *BackendLogicHook) processPumpStatusMessage(clientID string, payload []byte) {
+	var status struct {
+		NodeID string `json:"node_id"`
+		State  string `json:"state"`
+		Mac    string `json:"mac"`
+		Reason string `json:"reason"`
+	}
+	if err := json.Unmarshal(payload, &status); err != nil {
+		log.Printf("[Backend] invalid pump status from %s: %v", clientID, err)
+		return
+	}
+
+	state := strings.ToUpper(strings.TrimSpace(status.State))
+	if state != "ON" && state != "OFF" {
+		log.Printf("[Backend] invalid pump status state from %s: %s", clientID, status.State)
+		return
+	}
+
+	nodeID := strings.TrimSpace(status.NodeID)
+	if nodeID == "" {
+		nodeID = "unknown"
+	}
+
+	h.mu.Lock()
+	h.pumpOn = state == "ON"
+	h.mu.Unlock()
+
+	reason := strings.TrimSpace(status.Reason)
+	if reason == "" {
+		reason = "C3 xác nhận relay " + nodeID
+	}
+
+	h.recordPumpHistory(PumpHistoryEvent{
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		State:     state,
+		Source:    "device",
+		ClientID:  clientID,
+		NodeID:    nodeID,
+		Mac:       strings.TrimSpace(status.Mac),
+		Reason:    reason,
+		Confirmed: true,
+		Manual:    false,
+	})
+	log.Printf("[Backend] pump relay status from %s: node=%s state=%s", clientID, nodeID, state)
 }
 
 func pumpCommandSource(clientID string, manualCommand bool) string {

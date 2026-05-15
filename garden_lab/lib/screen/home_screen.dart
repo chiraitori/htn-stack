@@ -19,6 +19,7 @@ const _configuredMqttPort = int.fromEnvironment(
 const _mqttRetryInterval = Duration(seconds: 5);
 const _topicSensorData = 'garden/sensor/data';
 const _topicPumpControl = 'garden/control/pump';
+const _topicPumpStatus = 'garden/pump/status';
 const _topicPumpHistory = 'garden/pump/history';
 const _topicPumpHistoryGet = 'garden/pump/history/get';
 const _topicPumpHistoryState = 'garden/pump/history/state';
@@ -70,6 +71,8 @@ class _HomeScreenState extends State<HomeScreen> {
   String? manualOffResumeAt;
   String weatherSummary = 'Chưa có dữ liệu';
   String aiSuggestion = 'Chưa có gợi ý';
+  String? pumpRelayNodeId;
+  DateTime? pumpRelayUpdatedAt;
   List<PumpHistoryEvent> pumpHistoryEvents = const [];
 
   bool get isConnected => _connectionPhase == MqttConnectionPhase.connected;
@@ -177,6 +180,7 @@ class _HomeScreenState extends State<HomeScreen> {
   void _subscribeToTopics(MqttServerClient client) {
     client.subscribe(_topicSensorData, MqttQos.atMostOnce);
     client.subscribe(_topicPumpControl, MqttQos.atMostOnce);
+    client.subscribe(_topicPumpStatus, MqttQos.atLeastOnce);
     client.subscribe(_topicPumpHistory, MqttQos.atLeastOnce);
     client.subscribe(_topicPumpHistoryState, MqttQos.atLeastOnce);
     client.subscribe(_topicAIInsight, MqttQos.atMostOnce);
@@ -211,6 +215,9 @@ class _HomeScreenState extends State<HomeScreen> {
             break;
           case _topicPumpControl:
             _handlePumpPayload(payload);
+            break;
+          case _topicPumpStatus:
+            _handlePumpStatusPayload(payload);
             break;
           case _topicPumpHistory:
             _handlePumpHistoryPayload(payload);
@@ -256,6 +263,24 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() {
       isPumpOn = command == 'ON';
     });
+  }
+
+  void _handlePumpStatusPayload(String payload) {
+    try {
+      final data = jsonDecode(payload) as Map<String, dynamic>;
+      final state = (data['state'] ?? '').toString().trim().toUpperCase();
+      if (state != 'ON' && state != 'OFF') {
+        return;
+      }
+
+      setState(() {
+        isPumpOn = state == 'ON';
+        pumpRelayNodeId = (data['node_id'] ?? 'pump-1').toString();
+        pumpRelayUpdatedAt = DateTime.now();
+      });
+    } catch (e) {
+      debugPrint('Pump status JSON parse error: $e');
+    }
   }
 
   void _handlePumpHistoryPayload(String payload) {
@@ -704,6 +729,9 @@ class _HomeScreenState extends State<HomeScreen> {
         ? colorScheme.onPrimaryContainer
         : colorScheme.onSurface;
     final statusColor = isPumpOn ? colorScheme.primary : colorScheme.outline;
+    final relayLabel = pumpRelayUpdatedAt == null
+        ? null
+        : 'C3 ${pumpRelayNodeId ?? 'pump-1'} xác nhận ${_formatTime(pumpRelayUpdatedAt!)}';
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -767,6 +795,16 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                   ),
                 ),
+                if (relayLabel != null) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    relayLabel,
+                    style: textTheme.bodySmall?.copyWith(
+                      color: contentColor.withValues(alpha: 0.72),
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
@@ -796,6 +834,11 @@ class _HomeScreenState extends State<HomeScreen> {
         ],
       ),
     );
+  }
+
+  String _formatTime(DateTime time) {
+    String two(int value) => value.toString().padLeft(2, '0');
+    return '${two(time.hour)}:${two(time.minute)}';
   }
 
   String _formatDateTime(DateTime? time) {

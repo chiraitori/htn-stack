@@ -55,7 +55,10 @@ type PumpHistoryEvent struct {
 	State     string `json:"state" bson:"state"`
 	Source    string `json:"source" bson:"source"`
 	ClientID  string `json:"client_id" bson:"client_id"`
+	NodeID    string `json:"node_id,omitempty" bson:"node_id,omitempty"`
+	Mac       string `json:"mac,omitempty" bson:"mac,omitempty"`
 	Reason    string `json:"reason,omitempty" bson:"reason,omitempty"`
+	Confirmed bool   `json:"confirmed" bson:"confirmed"`
 	Manual    bool   `json:"manual" bson:"manual"`
 }
 

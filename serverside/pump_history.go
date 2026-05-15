@@ -70,7 +70,10 @@ func (h *BackendLogicHook) savePumpHistoryEvent(event PumpHistoryEvent) error {
 			"state":     event.State,
 			"source":    event.Source,
 			"client_id": event.ClientID,
+			"node_id":   event.NodeID,
+			"mac":       event.Mac,
 			"reason":    event.Reason,
+			"confirmed": event.Confirmed,
 			"manual":    event.Manual,
 		},
 	}
