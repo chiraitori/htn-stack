@@ -21,6 +21,7 @@ func (h *BackendLogicHook) Init(config any) error {
 	h.cfg = deps.Config
 	h.httpClient = deps.HTTPClient
 	h.history = deps.History
+	h.loadPumpHistory()
 	return nil
 }
 

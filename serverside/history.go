@@ -13,6 +13,7 @@ func (h *BackendLogicHook) saveHistory(clientID string, summary SensorBatchSumma
 	}
 
 	doc := bson.M{
+		"type":       "sensor_batch",
 		"created_at": time.Now().UTC(),
 		"client_id":  clientID,
 		"sensor_batch": bson.M{

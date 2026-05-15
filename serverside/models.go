@@ -51,12 +51,12 @@ type GardenConfigUpdate struct {
 }
 
 type PumpHistoryEvent struct {
-	Timestamp string `json:"timestamp"`
-	State     string `json:"state"`
-	Source    string `json:"source"`
-	ClientID  string `json:"client_id"`
-	Reason    string `json:"reason,omitempty"`
-	Manual    bool   `json:"manual"`
+	Timestamp string `json:"timestamp" bson:"timestamp"`
+	State     string `json:"state" bson:"state"`
+	Source    string `json:"source" bson:"source"`
+	ClientID  string `json:"client_id" bson:"client_id"`
+	Reason    string `json:"reason,omitempty" bson:"reason,omitempty"`
+	Manual    bool   `json:"manual" bson:"manual"`
 }
 
 type PumpHistoryState struct {

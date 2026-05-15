@@ -334,7 +334,9 @@ class _HomeScreenState extends State<HomeScreen> {
             (config['soil_pump_off_above'] as num? ?? soilPumpOffAbove)
                 .toDouble();
         final resumeAt = (config['manual_off_resume_at'] ?? '').toString();
-        manualOffResumeAt = resumeAt.isEmpty ? null : resumeAt;
+        manualOffResumeAt = resumeAt.isEmpty
+            ? null
+            : _formatDateTime(DateTime.tryParse(resumeAt)?.toLocal());
       });
     } catch (e) {
       debugPrint('Garden config JSON parse error: $e');
@@ -644,77 +646,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                     ),
                     const SizedBox(height: 16),
-                    Card(
-                      elevation: 0,
-                      color: isPumpOn
-                          ? colorScheme.primaryContainer
-                          : colorScheme.surfaceContainerHighest,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(24),
-                      ),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 20,
-                          vertical: 20,
-                        ),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Expanded(
-                              child: Row(
-                                children: [
-                                  Icon(
-                                    Icons.water_drop_rounded,
-                                    color: isPumpOn
-                                        ? colorScheme.onPrimaryContainer
-                                        : colorScheme.onSurfaceVariant,
-                                    size: 32,
-                                  ),
-                                  const SizedBox(width: 16),
-                                  Flexible(
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          'Máy Bơm Nước',
-                                          style: textTheme.titleMedium
-                                              ?.copyWith(
-                                                fontWeight: FontWeight.bold,
-                                                color: isPumpOn
-                                                    ? colorScheme
-                                                          .onPrimaryContainer
-                                                    : colorScheme
-                                                          .onSurfaceVariant,
-                                              ),
-                                        ),
-                                        const SizedBox(height: 4),
-                                        Text(
-                                          isConnected
-                                              ? (isPumpOn
-                                                    ? 'Đang tưới'
-                                                    : 'Đã tắt')
-                                              : 'Chờ kết nối MQTT',
-                                          style: textTheme.bodyMedium?.copyWith(
-                                            color: isPumpOn
-                                                ? colorScheme.onPrimaryContainer
-                                                : colorScheme.onSurfaceVariant,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            Switch(
-                              value: isPumpOn,
-                              onChanged: isConnected ? _togglePump : null,
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
+                    _buildPumpControlCard(colorScheme, textTheme),
                     const SizedBox(height: 32),
                   ],
                 ),
@@ -764,124 +696,326 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _buildGardenConfigCard(ColorScheme colorScheme, TextTheme textTheme) {
-    return Card(
-      elevation: 0,
-      color: colorScheme.surfaceContainerHighest,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            LayoutBuilder(
-              builder: (context, constraints) {
-                return DropdownMenu<String>(
-                  key: ValueKey(plantType),
-                  initialSelection: plantType,
-                  width: constraints.maxWidth,
-                  leadingIcon: const Icon(Icons.eco_rounded),
-                  label: const Text('Loại cây'),
-                  textStyle: textTheme.bodyLarge?.copyWith(
-                    fontWeight: FontWeight.w600,
-                  ),
-                  trailingIcon: Icon(
-                    Icons.keyboard_arrow_down_rounded,
-                    color: colorScheme.primary,
-                  ),
-                  selectedTrailingIcon: Icon(
-                    Icons.keyboard_arrow_up_rounded,
-                    color: colorScheme.primary,
-                  ),
-                  menuStyle: MenuStyle(
-                    backgroundColor: WidgetStatePropertyAll(
-                      colorScheme.surfaceContainer,
-                    ),
-                    surfaceTintColor: WidgetStatePropertyAll(
-                      colorScheme.primary,
-                    ),
-                    elevation: const WidgetStatePropertyAll(3),
-                    shadowColor: WidgetStatePropertyAll(
-                      colorScheme.shadow.withValues(alpha: 0.18),
-                    ),
-                    shape: WidgetStatePropertyAll(
-                      RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(24),
-                      ),
-                    ),
-                  ),
-                  dropdownMenuEntries: _plantTypes
-                      .map(
-                        (type) => DropdownMenuEntry(value: type, label: type),
-                      )
-                      .toList(),
-                  onSelected: (value) {
-                    if (value == null) {
-                      return;
-                    }
-                    setState(() => plantType = value);
-                  },
-                );
-              },
+  Widget _buildPumpControlCard(ColorScheme colorScheme, TextTheme textTheme) {
+    final containerColor = isPumpOn
+        ? colorScheme.primaryContainer
+        : colorScheme.surfaceContainer;
+    final contentColor = isPumpOn
+        ? colorScheme.onPrimaryContainer
+        : colorScheme.onSurface;
+    final statusColor = isPumpOn ? colorScheme.primary : colorScheme.outline;
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: containerColor,
+        borderRadius: BorderRadius.circular(28),
+        border: Border.all(
+          color: isPumpOn
+              ? colorScheme.primary.withValues(alpha: 0.20)
+              : colorScheme.outlineVariant.withValues(alpha: 0.65),
+        ),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 48,
+            height: 48,
+            decoration: BoxDecoration(
+              color: isPumpOn
+                  ? colorScheme.primary.withValues(alpha: 0.16)
+                  : colorScheme.surfaceContainerHigh,
+              shape: BoxShape.circle,
             ),
-            const SizedBox(height: 12),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              value: autoPumpEnabled,
-              onChanged: (value) => setState(() => autoPumpEnabled = value),
-              title: const Text('Tự bật/tắt bơm theo độ ẩm đất'),
-              secondary: const Icon(Icons.auto_mode_rounded),
+            child: Icon(
+              Icons.water_drop_rounded,
+              color: isPumpOn ? colorScheme.primary : colorScheme.outline,
+              size: 26,
             ),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              value: aiRecommend,
-              onChanged: (value) => setState(() => aiRecommend = value),
-              title: const Text('AI gợi ý theo loại cây'),
-              secondary: const Icon(Icons.psychology_rounded),
-            ),
-            if (manualOffResumeAt != null) ...[
-              const SizedBox(height: 8),
-              Text(
-                'Đang tắt tay, auto tưới sẽ bật lại sau $manualOffResumeAt',
-                style: textTheme.bodyMedium?.copyWith(
-                  color: colorScheme.onSurfaceVariant,
-                ),
-              ),
-            ],
-            const SizedBox(height: 8),
-            _buildThresholdSlider(
-              textTheme: textTheme,
-              colorScheme: colorScheme,
-              label: 'Bật bơm khi đất <= ${soilPumpOnBelow.round()}%',
-              value: soilPumpOnBelow,
-              onChanged: _setPumpOnThreshold,
-            ),
-            _buildThresholdSlider(
-              textTheme: textTheme,
-              colorScheme: colorScheme,
-              label: 'Tắt bơm khi đất >= ${soilPumpOffAbove.round()}%',
-              value: soilPumpOffAbove,
-              onChanged: _setPumpOffThreshold,
-            ),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 12,
-              runSpacing: 12,
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                FilledButton.icon(
-                  onPressed: isConnected ? _publishGardenConfig : null,
-                  icon: const Icon(Icons.save_rounded),
-                  label: const Text('Lưu cấu hình'),
+                Text(
+                  'Máy Bơm Nước',
+                  style: textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w800,
+                    color: contentColor,
+                  ),
                 ),
-                OutlinedButton.icon(
-                  onPressed: isConnected ? _requestAIRecommendation : null,
-                  icon: const Icon(Icons.tips_and_updates_rounded),
-                  label: const Text('Gợi ý AI'),
+                const SizedBox(height: 6),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 5,
+                  ),
+                  decoration: BoxDecoration(
+                    color: statusColor.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: Text(
+                    isConnected
+                        ? (isPumpOn ? 'Đang tưới' : 'Đã tắt')
+                        : 'Chờ MQTT',
+                    style: textTheme.labelMedium?.copyWith(
+                      color: isConnected
+                          ? statusColor
+                          : colorScheme.onSurfaceVariant,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
                 ),
               ],
             ),
-          ],
+          ),
+          Switch(
+            value: isPumpOn,
+            onChanged: isConnected ? _togglePump : null,
+            thumbColor: WidgetStateProperty.resolveWith((states) {
+              if (states.contains(WidgetState.disabled)) {
+                return colorScheme.onSurface.withValues(alpha: 0.38);
+              }
+              if (states.contains(WidgetState.selected)) {
+                return colorScheme.onPrimary;
+              }
+              return colorScheme.outline;
+            }),
+            trackColor: WidgetStateProperty.resolveWith((states) {
+              if (states.contains(WidgetState.disabled)) {
+                return colorScheme.surfaceContainerHigh.withValues(alpha: 0.55);
+              }
+              if (states.contains(WidgetState.selected)) {
+                return colorScheme.primary;
+              }
+              return colorScheme.surfaceContainerHigh;
+            }),
+            trackOutlineColor: const WidgetStatePropertyAll(Colors.transparent),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _formatDateTime(DateTime? time) {
+    if (time == null) {
+      return 'không rõ';
+    }
+
+    String two(int value) => value.toString().padLeft(2, '0');
+    return '${two(time.hour)}:${two(time.minute)}, ${two(time.day)}/${two(time.month)}/${time.year}';
+  }
+
+  Widget _buildGardenConfigCard(ColorScheme colorScheme, TextTheme textTheme) {
+    return Container(
+      decoration: BoxDecoration(
+        color: colorScheme.surfaceContainer,
+        borderRadius: BorderRadius.circular(28),
+        border: Border.all(
+          color: colorScheme.outlineVariant.withValues(alpha: 0.65),
         ),
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(28),
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  return DropdownMenu<String>(
+                    key: ValueKey(plantType),
+                    initialSelection: plantType,
+                    width: constraints.maxWidth,
+                    leadingIcon: const Icon(Icons.eco_rounded),
+                    label: const Text('Loại cây'),
+                    textStyle: textTheme.bodyLarge?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
+                    trailingIcon: Icon(
+                      Icons.keyboard_arrow_down_rounded,
+                      color: colorScheme.primary,
+                    ),
+                    selectedTrailingIcon: Icon(
+                      Icons.keyboard_arrow_up_rounded,
+                      color: colorScheme.primary,
+                    ),
+                    menuStyle: MenuStyle(
+                      backgroundColor: WidgetStatePropertyAll(
+                        colorScheme.surfaceContainer,
+                      ),
+                      surfaceTintColor: WidgetStatePropertyAll(
+                        colorScheme.primary,
+                      ),
+                      elevation: const WidgetStatePropertyAll(3),
+                      shadowColor: WidgetStatePropertyAll(
+                        colorScheme.shadow.withValues(alpha: 0.18),
+                      ),
+                      shape: WidgetStatePropertyAll(
+                        RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(24),
+                        ),
+                      ),
+                    ),
+                    dropdownMenuEntries: _plantTypes
+                        .map(
+                          (type) => DropdownMenuEntry(value: type, label: type),
+                        )
+                        .toList(),
+                    onSelected: (value) {
+                      if (value == null) {
+                        return;
+                      }
+                      setState(() => plantType = value);
+                    },
+                  );
+                },
+              ),
+              const SizedBox(height: 16),
+              _buildSettingSwitch(
+                colorScheme: colorScheme,
+                textTheme: textTheme,
+                icon: Icons.auto_mode_rounded,
+                title: 'Tự động tưới',
+                subtitle: 'Bật/tắt bơm theo độ ẩm đất',
+                value: autoPumpEnabled,
+                onChanged: (value) => setState(() => autoPumpEnabled = value),
+              ),
+              const SizedBox(height: 10),
+              _buildSettingSwitch(
+                colorScheme: colorScheme,
+                textTheme: textTheme,
+                icon: Icons.psychology_rounded,
+                title: 'AI gợi ý',
+                subtitle: 'Đề xuất ngưỡng theo loại cây',
+                value: aiRecommend,
+                onChanged: (value) => setState(() => aiRecommend = value),
+              ),
+              if (manualOffResumeAt != null) ...[
+                const SizedBox(height: 12),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: colorScheme.tertiaryContainer.withValues(
+                      alpha: 0.45,
+                    ),
+                    borderRadius: BorderRadius.circular(18),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.pause_circle_rounded,
+                        color: colorScheme.onTertiaryContainer,
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          'Đang tắt tay. Auto tưới bật lại lúc $manualOffResumeAt',
+                          style: textTheme.bodyMedium?.copyWith(
+                            color: colorScheme.onTertiaryContainer,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+              const SizedBox(height: 18),
+              _buildThresholdSlider(
+                textTheme: textTheme,
+                colorScheme: colorScheme,
+                label: 'Bật bơm khi đất khô',
+                valueLabel: '<= ${soilPumpOnBelow.round()}%',
+                value: soilPumpOnBelow,
+                onChanged: _setPumpOnThreshold,
+              ),
+              const SizedBox(height: 12),
+              _buildThresholdSlider(
+                textTheme: textTheme,
+                colorScheme: colorScheme,
+                label: 'Tắt bơm khi đất đủ ẩm',
+                valueLabel: '>= ${soilPumpOffAbove.round()}%',
+                value: soilPumpOffAbove,
+                onChanged: _setPumpOffThreshold,
+              ),
+              const SizedBox(height: 18),
+              Row(
+                children: [
+                  Expanded(
+                    child: FilledButton.icon(
+                      onPressed: isConnected ? _publishGardenConfig : null,
+                      icon: const Icon(Icons.save_rounded),
+                      label: const Text('Lưu'),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: FilledButton.tonalIcon(
+                      onPressed: isConnected ? _requestAIRecommendation : null,
+                      icon: const Icon(Icons.tips_and_updates_rounded),
+                      label: const Text('AI gợi ý'),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSettingSwitch({
+    required ColorScheme colorScheme,
+    required TextTheme textTheme,
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required bool value,
+    required ValueChanged<bool> onChanged,
+  }) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 12, 10, 12),
+      decoration: BoxDecoration(
+        color: colorScheme.surfaceContainerHigh,
+        borderRadius: BorderRadius.circular(22),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: colorScheme.primaryContainer,
+              shape: BoxShape.circle,
+            ),
+            child: Icon(icon, color: colorScheme.onPrimaryContainer, size: 22),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  subtitle,
+                  style: textTheme.bodySmall?.copyWith(
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Switch(value: value, onChanged: onChanged),
+        ],
       ),
     );
   }
@@ -890,25 +1024,58 @@ class _HomeScreenState extends State<HomeScreen> {
     required TextTheme textTheme,
     required ColorScheme colorScheme,
     required String label,
+    required String valueLabel,
     required double value,
     required ValueChanged<double> onChanged,
   }) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          label,
-          style: textTheme.labelLarge?.copyWith(color: colorScheme.onSurface),
-        ),
-        Slider(
-          value: value.clamp(0, 100).toDouble(),
-          min: 0,
-          max: 100,
-          divisions: 100,
-          label: '${value.round()}%',
-          onChanged: onChanged,
-        ),
-      ],
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 8),
+      decoration: BoxDecoration(
+        color: colorScheme.surfaceContainerHigh,
+        borderRadius: BorderRadius.circular(22),
+      ),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  label,
+                  style: textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w700,
+                    color: colorScheme.onSurface,
+                  ),
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 6,
+                ),
+                decoration: BoxDecoration(
+                  color: colorScheme.primaryContainer,
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  valueLabel,
+                  style: textTheme.labelLarge?.copyWith(
+                    color: colorScheme.onPrimaryContainer,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          Slider(
+            value: value.clamp(0, 100).toDouble(),
+            min: 0,
+            max: 100,
+            divisions: 100,
+            label: '${value.round()}%',
+            onChanged: onChanged,
+          ),
+        ],
+      ),
     );
   }
 
